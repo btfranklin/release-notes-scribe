@@ -1,0 +1,24 @@
+{
+  "name": "release-notes-scribe",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GitHub Action to generate LLM release notes and draft releases.",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "ncc build src/index.ts -o dist",
+    "lint": "tsc --noEmit",
+    "test": "vitest run",
+    "release": "node scripts/release.mjs"
+  },
+  "dependencies": {
+    "@actions/core": "^2.0.1",
+    "@actions/github": "^6.0.1",
+    "openai": "^6.15.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.3",
+    "@vercel/ncc": "^0.38.4",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.16"
+  }
+}

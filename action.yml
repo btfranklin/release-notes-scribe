@@ -1,0 +1,65 @@
+name: "Release Notes Scribe"
+description: "Generate draft release notes using OpenAI Responses API and create a GitHub draft release"
+author: "release-notes-scribe"
+branding:
+  icon: "file-text"
+  color: "blue"
+
+inputs:
+  openai_api_key:
+    description: "OpenAI-compatible API key (Responses API required)."
+    required: true
+  openai_base_url:
+    description: "Optional base URL for OpenAI-compatible providers."
+    required: false
+    default: ""
+  model:
+    description: "Model name (must support OpenAI Responses API)."
+    required: false
+    default: "gpt-5.2"
+  github_token:
+    description: "GitHub token with contents:write permissions. Defaults to GITHUB_TOKEN env var."
+    required: false
+    default: ""
+  tag:
+    description: "Release tag. Defaults to the tag that triggered the workflow."
+    required: false
+    default: ""
+  previous_tag:
+    description: "Override the previous tag for comparison."
+    required: false
+    default: ""
+  include_github_generated_notes:
+    description: "Include GitHub-generated release notes as extra context for the model."
+    required: false
+    default: "false"
+  max_diff_lines:
+    description: "Max diff lines per commit to include in the prompt."
+    required: false
+    default: "120"
+  max_commits:
+    description: "Max commits to include in the prompt."
+    required: false
+    default: "200"
+  draft:
+    description: "Create the release as a draft."
+    required: false
+    default: "true"
+  prerelease:
+    description: "Mark the release as a prerelease."
+    required: false
+    default: "false"
+  release_name:
+    description: "Override the release title. Defaults to the tag."
+    required: false
+    default: ""
+
+outputs:
+  release_notes:
+    description: "Generated release notes in Markdown."
+  release_url:
+    description: "URL of the created GitHub release."
+
+runs:
+  using: "node20"
+  main: "dist/index.js"
