@@ -30,3 +30,5 @@ Release Notes Scribe is a GitHub Action that generates draft release notes using
 - The action uses the OpenAI Responses API via the OpenAI client. Model must support Responses API.
 - `release.yml` uses `uses: ./` to run the action from the repo itself; consumers use `btfranklin/release-notes-scribe@vX.Y.Z` or a moving major tag.
 - Keep README examples aligned with actual defaults and current tag patterns.
+- Large releases are summarized in multiple stages, limited by `max_stage_chars`.
+- Non-source files are summarized by filename only; configure `source_extensions` to expand what's treated as source.

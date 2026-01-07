@@ -121,6 +121,20 @@ describe.sequential("release notes helpers", () => {
       expect(prompt).toContain("The changes in this commit were:");
     }));
 
+  it("summarizes non-source files by filename only", async () =>
+    withRepo((repo) => {
+      commitFile(repo, "README.md", "docs", "docs: update readme", 1);
+      createTag(repo, "v1.0.0", 1);
+
+      const shas = getCommitShas("", "v1.0.0", 10);
+      const commits = buildCommitData(shas, 50);
+
+      expect(commits[0].diffLines.join("\n")).toContain(
+        "README.md: non-source change (diff omitted)"
+      );
+      expect(commits[0].diffLines.join("\n")).not.toContain("+docs");
+    }));
+
   it("extracts text from Responses API shapes", () => {
     expect(extractResponseText({ output_text: "hello" })).toBe("hello");
     expect(

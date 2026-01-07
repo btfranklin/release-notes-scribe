@@ -49,6 +49,8 @@ jobs:
 - `include_github_generated_notes`: Add GitHub-generated notes as extra context. Default: `false`.
 - `max_diff_lines`: Max diff lines per commit in prompt. Default: `120`.
 - `max_commits`: Max commits to include. Default: `200`.
+- `max_stage_chars`: Max characters per summarization stage (approx 4 chars/token). Default: `400000`.
+- `source_extensions`: Comma/space-separated list of source code extensions to include diffs for. Non-source files are filename-only. Default: built-in language list.
 - `draft`: Create the release as a draft. Default: `true`.
 - `prerelease`: Mark release as prerelease. Default: `false`.
 - `release_name`: Override release title. Defaults to the tag.
@@ -64,6 +66,7 @@ jobs:
 - Shallow clones will warn and can block tag discovery.
 - If no previous tag is found, the action compares against the empty tree.
 - For tag-triggered workflows, prefer `v*.*.*` so moving major tags like `v1` don't trigger runs.
+- Large releases are summarized in multiple stages to stay within prompt limits.
 
 ## Testing
 

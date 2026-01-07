@@ -2,10 +2,55 @@ import { execFileSync } from "node:child_process";
 
 const MAX_LINE_LENGTH = 300;
 
+export const DEFAULT_SOURCE_EXTENSIONS = new Set([
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+  ".py",
+  ".go",
+  ".rs",
+  ".java",
+  ".kt",
+  ".kts",
+  ".swift",
+  ".cs",
+  ".cpp",
+  ".c",
+  ".h",
+  ".hpp",
+  ".m",
+  ".mm",
+  ".rb",
+  ".php",
+  ".scala",
+  ".lua",
+  ".sh",
+  ".ps1",
+  ".pl",
+  ".r",
+  ".dart",
+  ".sql",
+  ".hs",
+  ".clj",
+  ".cljs",
+  ".erl",
+  ".ex",
+  ".exs",
+]);
+
 export type CommitData = {
   sha: string;
   message: string;
   diffLines: string[];
+};
+
+type FileStat = {
+  path: string;
+  isBinary: boolean;
+  isSource: boolean;
 };
 
 export type Logger = {
@@ -182,19 +227,78 @@ function fallbackFileChanges(sha: string, maxLines: number): string[] {
   return results;
 }
 
+function normalizePath(path: string): string {
+  if (!path.includes("=>")) {
+    return path;
+  }
+  const parts = path.split("=>");
+  const candidate = parts[parts.length - 1]?.trim() ?? path;
+  return candidate.replace(/[{}]/g, "");
+}
+
+function isSourcePath(path: string, extensions: Set<string>): boolean {
+  const normalized = normalizePath(path).toLowerCase();
+  const dotIndex = normalized.lastIndexOf(".");
+  if (dotIndex === -1) {
+    return false;
+  }
+  return extensions.has(normalized.slice(dotIndex));
+}
+
+function getFileStats(sha: string, extensions: Set<string>): FileStat[] {
+  const output = runGit(["show", "--numstat", "--pretty=format:", sha]);
+  if (!output) {
+    return [];
+  }
+  const stats: FileStat[] = [];
+  for (const line of output.split("\n")) {
+    if (!line.trim()) {
+      continue;
+    }
+    const [additions, deletions, ...pathParts] = line.split("\t");
+    const rawPath = pathParts.join("\t");
+    if (!rawPath) {
+      continue;
+    }
+    const path = normalizePath(rawPath);
+    const isBinary = additions === "-" || deletions === "-";
+    const isSource = !isBinary && isSourcePath(path, extensions);
+    stats.push({ path, isBinary, isSource });
+  }
+  return stats;
+}
+
+function summarizeNonSource(file: FileStat): string {
+  if (file.isBinary) {
+    return `${file.path}: binary change (diff omitted)`;
+  }
+  return `${file.path}: non-source change (diff omitted)`;
+}
+
+function summarizeSource(path: string): string {
+  return `${path}: source change (diff omitted)`;
+}
+
 export function extractDiffLines(
   diff: string,
   maxLines: number,
-  sha: string
+  sha: string,
+  allowedPaths?: Set<string>
 ): string[] {
   const results: string[] = [];
   let currentFile = "";
+  let includeFile = true;
 
   for (const rawLine of diff.split("\n")) {
     const line = rawLine.replace(/\r$/, "");
     if (line.startsWith("diff --git ")) {
       const match = /^diff --git a\/(.+?) b\/(.+)$/.exec(line);
       currentFile = match?.[2] ?? match?.[1] ?? "";
+      includeFile = allowedPaths ? allowedPaths.has(currentFile) : true;
+      continue;
+    }
+
+    if (!includeFile) {
       continue;
     }
 
@@ -244,32 +348,61 @@ function formatErrorMessage(error: unknown): string {
 export function buildCommitData(
   shas: string[],
   maxDiffLines: number,
-  logger: Logger = noopLogger
+  logger: Logger = noopLogger,
+  sourceExtensions: Set<string> = DEFAULT_SOURCE_EXTENSIONS
 ): CommitData[] {
   return shas.map((sha) => {
     const message = runGit(["log", "-1", "--pretty=format:%s%n%n%b", sha]).trim();
+    const fileStats = getFileStats(sha, sourceExtensions);
+    const sourcePaths = fileStats
+      .filter((file) => file.isSource)
+      .map((file) => file.path);
+    const sourcePathSet = new Set(sourcePaths);
+    const nonSourceEntries = fileStats
+      .filter((file) => !file.isSource)
+      .map((file) => summarizeNonSource(file));
     let diffLines: string[] = [];
+
     try {
-      const diff = runGit(
-        ["show", "--no-color", "--unified=0", "--pretty=format:", sha],
-        { trim: false, maxBuffer: 10 * 1024 * 1024 }
-      );
-      diffLines = extractDiffLines(diff, maxDiffLines, sha);
+      if (sourcePaths.length) {
+        const diff = runGit(
+          ["show", "--no-color", "--unified=0", "--pretty=format:", sha],
+          { trim: false, maxBuffer: 10 * 1024 * 1024 }
+        );
+        diffLines = extractDiffLines(diff, maxDiffLines, sha, sourcePathSet);
+      }
     } catch (error) {
       logger.warning(
         `Failed to read diff for ${sha.slice(0, 7)}: ${formatErrorMessage(
           error
         )}. Falling back to file summary.`
       );
-      diffLines = fallbackFileChanges(sha, maxDiffLines);
+      diffLines = sourcePaths.length
+        ? sourcePaths.slice(0, maxDiffLines).map(summarizeSource)
+        : [];
     }
 
     return {
       sha,
       message: message || "(no commit message)",
-      diffLines,
+      diffLines: [...diffLines, ...nonSourceEntries].slice(0, maxDiffLines),
     };
   });
+}
+
+export function formatCommitBlock(commit: CommitData): string {
+  const diffLines = commit.diffLines.length
+    ? commit.diffLines
+    : ["(No diff content available)"];
+  const diffText = diffLines.map((line) => `- ${line}`).join("\n");
+  return [
+    `Commit ${commit.sha.slice(0, 7)}`,
+    "The following changes had this commit message:",
+    commit.message,
+    "",
+    "The changes in this commit were:",
+    diffText,
+  ].join("\n");
 }
 
 export function buildPrompt(
@@ -286,20 +419,7 @@ export function buildPrompt(
   ].join("\n");
 
   const commitBlocks = commits.length
-    ? commits.map((commit) => {
-        const diffLines = commit.diffLines.length
-          ? commit.diffLines
-          : ["(No diff content available)"];
-        const diffText = diffLines.map((line) => `- ${line}`).join("\n");
-        return [
-          `Commit ${commit.sha.slice(0, 7)}`,
-          "The following changes had this commit message:",
-          commit.message,
-          "",
-          "The changes in this commit were:",
-          diffText,
-        ].join("\n");
-      })
+    ? commits.map((commit) => formatCommitBlock(commit))
     : [
         "No commits were found between the previous and current tag.",
         "Write a short placeholder release note that explains there are no code changes.",

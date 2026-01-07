@@ -30977,6 +30977,108 @@ function getInputBoolean(name, defaultValue) {
     }
     return ["true", "1", "yes", "y", "on"].includes(raw.toLowerCase());
 }
+function parseSourceExtensions(input) {
+    if (!input.trim()) {
+        return new Set(lib_1.DEFAULT_SOURCE_EXTENSIONS);
+    }
+    const values = input
+        .split(/[\s,]+/)
+        .map((value) => value.trim())
+        .filter(Boolean)
+        .map((value) => value.startsWith(".") ? value.toLowerCase() : `.${value.toLowerCase()}`);
+    return new Set(values);
+}
+function trimText(text, maxLength) {
+    if (text.length <= maxLength) {
+        return text;
+    }
+    if (maxLength <= 3) {
+        return text.slice(0, maxLength);
+    }
+    return `${text.slice(0, maxLength - 3)}...`;
+}
+function truncateCommit(commit, maxChars, logger) {
+    let message = commit.message;
+    let diffLines = [...commit.diffLines];
+    let changed = false;
+    const maxMessageLength = Math.max(200, Math.floor(maxChars / 4));
+    if (message.length > maxMessageLength) {
+        message = trimText(message, maxMessageLength);
+        changed = true;
+    }
+    let block = (0, lib_1.formatCommitBlock)({ ...commit, message, diffLines });
+    while (block.length > maxChars && diffLines.length) {
+        diffLines.pop();
+        changed = true;
+        block = (0, lib_1.formatCommitBlock)({ ...commit, message, diffLines });
+    }
+    if (block.length > maxChars && diffLines.length) {
+        diffLines = [];
+        changed = true;
+    }
+    if (block.length > maxChars) {
+        message = trimText(message, Math.max(50, maxChars - 200));
+        diffLines = [];
+        changed = true;
+    }
+    if (changed) {
+        logger.warning(`Commit ${commit.sha.slice(0, 7)} truncated to fit prompt budget.`);
+    }
+    return { ...commit, message, diffLines };
+}
+function chunkCommits(commits, maxChars, logger) {
+    const chunks = [];
+    let current = [];
+    let currentSize = 0;
+    for (const commit of commits) {
+        let candidate = commit;
+        let block = (0, lib_1.formatCommitBlock)(candidate);
+        if (block.length > maxChars) {
+            candidate = truncateCommit(commit, maxChars, logger);
+            block = (0, lib_1.formatCommitBlock)(candidate);
+        }
+        if (current.length && currentSize + block.length + 2 > maxChars) {
+            chunks.push(current);
+            current = [];
+            currentSize = 0;
+        }
+        current.push(candidate);
+        currentSize += block.length + 2;
+    }
+    if (current.length) {
+        chunks.push(current);
+    }
+    return chunks;
+}
+function buildSummaryPrompt(currentTag, previousTag, commits) {
+    return (0, lib_1.buildPrompt)(currentTag, previousTag, commits, "");
+}
+function buildFinalPrompt(currentTag, previousTag, summaries, githubNotes) {
+    const header = [
+        `Release tag: ${currentTag}`,
+        previousTag ? `Previous tag: ${previousTag}` : "Previous tag: (none)",
+        `Summary batch count: ${summaries.length}`,
+        "",
+    ].join("\n");
+    const blocks = summaries.map((summary, index) => `Batch ${index + 1} summary:\n${summary}`);
+    let prompt = `${header}${blocks.join("\n\n")}`;
+    if (githubNotes) {
+        prompt += `\n\nGitHub auto-generated notes (extra context, do not quote verbatim):\n${githubNotes}`;
+    }
+    return prompt;
+}
+async function generateResponseText(client, model, input, instructions, label) {
+    const response = await client.responses.create({
+        model,
+        input,
+        instructions,
+    });
+    const text = (0, lib_1.extractResponseText)(response).trim();
+    if (!text) {
+        throw new Error(`Model response did not include text output (${label}).`);
+    }
+    return text;
+}
 async function run() {
     try {
         const apiKey = core.getInput("openai_api_key", { required: true });
@@ -30988,6 +31090,8 @@ async function run() {
         const includeGithubNotes = getInputBoolean("include_github_generated_notes", false);
         const maxDiffLines = Number.parseInt(core.getInput("max_diff_lines") || "120", 10);
         const maxCommits = Number.parseInt(core.getInput("max_commits") || "200", 10);
+        const maxStageChars = Number.parseInt(core.getInput("max_stage_chars") || "400000", 10);
+        const sourceExtensions = parseSourceExtensions(core.getInput("source_extensions"));
         const draft = getInputBoolean("draft", true);
         const prerelease = getInputBoolean("prerelease", false);
         const releaseNameOverride = core.getInput("release_name");
@@ -30999,6 +31103,9 @@ async function run() {
         }
         if (Number.isNaN(maxCommits) || maxCommits < 1) {
             throw new Error("max_commits must be a positive integer.");
+        }
+        if (Number.isNaN(maxStageChars) || maxStageChars < 1000) {
+            throw new Error("max_stage_chars must be an integer >= 1000.");
         }
         const tag = inputTag || (0, lib_1.getTagFromRef)(github_1.context.ref) || "";
         if (!tag) {
@@ -31016,7 +31123,7 @@ async function run() {
         if (!commitShas.length) {
             core.warning("No commits found between tags; nothing to summarize.");
         }
-        const commits = (0, lib_1.buildCommitData)(commitShas, maxDiffLines, logger);
+        const commits = (0, lib_1.buildCommitData)(commitShas, maxDiffLines, logger, sourceExtensions);
         const octokit = (0, github_1.getOctokit)(githubToken);
         let githubNotes = "";
         if (includeGithubNotes) {
@@ -31034,22 +31141,35 @@ async function run() {
                 core.warning(`Failed to fetch GitHub-generated notes: ${error}`);
             }
         }
-        const prompt = (0, lib_1.buildPrompt)(tag, previousTag, commits, githubNotes);
         const client = new openai_1.default({
             apiKey,
             baseURL: baseUrl,
         });
-        const response = await client.responses.create({
-            model,
-            input: prompt,
-            instructions: "Write concise release notes in Markdown for end users. " +
-                "Use a '## What's Changed' heading and bullet points. " +
-                "Prefer user-facing changes over internal refactors. " +
-                "Do not include code fences.",
-        });
-        const releaseNotes = (0, lib_1.extractResponseText)(response).trim();
-        if (!releaseNotes) {
-            throw new Error("Model response did not include any text output.");
+        const finalInstructions = "Write concise release notes in Markdown for end users. " +
+            "Use a '## What's Changed' heading and bullet points. " +
+            "Prefer user-facing changes over internal refactors. " +
+            "Do not include code fences.";
+        const stageInstructions = "Summarize the following commits into a concise Markdown bullet list. " +
+            "Focus on user-facing changes; mention notable internal changes briefly. " +
+            "Do not include code fences.";
+        const fullPrompt = (0, lib_1.buildPrompt)(tag, previousTag, commits, githubNotes);
+        let releaseNotes = "";
+        if (fullPrompt.length <= maxStageChars) {
+            releaseNotes = await generateResponseText(client, model, fullPrompt, finalInstructions, "final");
+        }
+        else {
+            const chunkBudget = Math.max(1000, maxStageChars - 2000);
+            const chunks = chunkCommits(commits, chunkBudget, logger);
+            const summaries = [];
+            core.info(`Full prompt size ${fullPrompt.length} exceeds ${maxStageChars}. ` +
+                `Summarizing in ${chunks.length} batches.`);
+            for (let index = 0; index < chunks.length; index += 1) {
+                const chunkPrompt = buildSummaryPrompt(tag, previousTag, chunks[index]);
+                const summary = await generateResponseText(client, model, chunkPrompt, stageInstructions, `stage-${index + 1}`);
+                summaries.push(summary);
+            }
+            const finalPrompt = buildFinalPrompt(tag, previousTag, summaries, githubNotes);
+            releaseNotes = await generateResponseText(client, model, finalPrompt, finalInstructions, "final");
         }
         const releaseName = releaseNameOverride || tag;
         const release = await octokit.rest.repos.createRelease({
@@ -31082,6 +31202,7 @@ run();
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.DEFAULT_SOURCE_EXTENSIONS = void 0;
 exports.runGit = runGit;
 exports.isShallowRepository = isShallowRepository;
 exports.getTagFromRef = getTagFromRef;
@@ -31090,10 +31211,49 @@ exports.resolvePreviousTag = resolvePreviousTag;
 exports.getCommitShas = getCommitShas;
 exports.extractDiffLines = extractDiffLines;
 exports.buildCommitData = buildCommitData;
+exports.formatCommitBlock = formatCommitBlock;
 exports.buildPrompt = buildPrompt;
 exports.extractResponseText = extractResponseText;
 const node_child_process_1 = __nccwpck_require__(1421);
 const MAX_LINE_LENGTH = 300;
+exports.DEFAULT_SOURCE_EXTENSIONS = new Set([
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".cjs",
+    ".py",
+    ".go",
+    ".rs",
+    ".java",
+    ".kt",
+    ".kts",
+    ".swift",
+    ".cs",
+    ".cpp",
+    ".c",
+    ".h",
+    ".hpp",
+    ".m",
+    ".mm",
+    ".rb",
+    ".php",
+    ".scala",
+    ".lua",
+    ".sh",
+    ".ps1",
+    ".pl",
+    ".r",
+    ".dart",
+    ".sql",
+    ".hs",
+    ".clj",
+    ".cljs",
+    ".erl",
+    ".ex",
+    ".exs",
+]);
 const noopLogger = {
     info: () => { },
     warning: () => { },
@@ -31220,14 +31380,66 @@ function fallbackFileChanges(sha, maxLines) {
     }
     return results;
 }
-function extractDiffLines(diff, maxLines, sha) {
+function normalizePath(path) {
+    if (!path.includes("=>")) {
+        return path;
+    }
+    const parts = path.split("=>");
+    const candidate = parts[parts.length - 1]?.trim() ?? path;
+    return candidate.replace(/[{}]/g, "");
+}
+function isSourcePath(path, extensions) {
+    const normalized = normalizePath(path).toLowerCase();
+    const dotIndex = normalized.lastIndexOf(".");
+    if (dotIndex === -1) {
+        return false;
+    }
+    return extensions.has(normalized.slice(dotIndex));
+}
+function getFileStats(sha, extensions) {
+    const output = runGit(["show", "--numstat", "--pretty=format:", sha]);
+    if (!output) {
+        return [];
+    }
+    const stats = [];
+    for (const line of output.split("\n")) {
+        if (!line.trim()) {
+            continue;
+        }
+        const [additions, deletions, ...pathParts] = line.split("\t");
+        const rawPath = pathParts.join("\t");
+        if (!rawPath) {
+            continue;
+        }
+        const path = normalizePath(rawPath);
+        const isBinary = additions === "-" || deletions === "-";
+        const isSource = !isBinary && isSourcePath(path, extensions);
+        stats.push({ path, isBinary, isSource });
+    }
+    return stats;
+}
+function summarizeNonSource(file) {
+    if (file.isBinary) {
+        return `${file.path}: binary change (diff omitted)`;
+    }
+    return `${file.path}: non-source change (diff omitted)`;
+}
+function summarizeSource(path) {
+    return `${path}: source change (diff omitted)`;
+}
+function extractDiffLines(diff, maxLines, sha, allowedPaths) {
     const results = [];
     let currentFile = "";
+    let includeFile = true;
     for (const rawLine of diff.split("\n")) {
         const line = rawLine.replace(/\r$/, "");
         if (line.startsWith("diff --git ")) {
             const match = /^diff --git a\/(.+?) b\/(.+)$/.exec(line);
             currentFile = match?.[2] ?? match?.[1] ?? "";
+            includeFile = allowedPaths ? allowedPaths.has(currentFile) : true;
+            continue;
+        }
+        if (!includeFile) {
             continue;
         }
         if (line.startsWith("+++ ") ||
@@ -31265,24 +31477,50 @@ function formatErrorMessage(error) {
     }
     return String(error);
 }
-function buildCommitData(shas, maxDiffLines, logger = noopLogger) {
+function buildCommitData(shas, maxDiffLines, logger = noopLogger, sourceExtensions = exports.DEFAULT_SOURCE_EXTENSIONS) {
     return shas.map((sha) => {
         const message = runGit(["log", "-1", "--pretty=format:%s%n%n%b", sha]).trim();
+        const fileStats = getFileStats(sha, sourceExtensions);
+        const sourcePaths = fileStats
+            .filter((file) => file.isSource)
+            .map((file) => file.path);
+        const sourcePathSet = new Set(sourcePaths);
+        const nonSourceEntries = fileStats
+            .filter((file) => !file.isSource)
+            .map((file) => summarizeNonSource(file));
         let diffLines = [];
         try {
-            const diff = runGit(["show", "--no-color", "--unified=0", "--pretty=format:", sha], { trim: false, maxBuffer: 10 * 1024 * 1024 });
-            diffLines = extractDiffLines(diff, maxDiffLines, sha);
+            if (sourcePaths.length) {
+                const diff = runGit(["show", "--no-color", "--unified=0", "--pretty=format:", sha], { trim: false, maxBuffer: 10 * 1024 * 1024 });
+                diffLines = extractDiffLines(diff, maxDiffLines, sha, sourcePathSet);
+            }
         }
         catch (error) {
             logger.warning(`Failed to read diff for ${sha.slice(0, 7)}: ${formatErrorMessage(error)}. Falling back to file summary.`);
-            diffLines = fallbackFileChanges(sha, maxDiffLines);
+            diffLines = sourcePaths.length
+                ? sourcePaths.slice(0, maxDiffLines).map(summarizeSource)
+                : [];
         }
         return {
             sha,
             message: message || "(no commit message)",
-            diffLines,
+            diffLines: [...diffLines, ...nonSourceEntries].slice(0, maxDiffLines),
         };
     });
+}
+function formatCommitBlock(commit) {
+    const diffLines = commit.diffLines.length
+        ? commit.diffLines
+        : ["(No diff content available)"];
+    const diffText = diffLines.map((line) => `- ${line}`).join("\n");
+    return [
+        `Commit ${commit.sha.slice(0, 7)}`,
+        "The following changes had this commit message:",
+        commit.message,
+        "",
+        "The changes in this commit were:",
+        diffText,
+    ].join("\n");
 }
 function buildPrompt(currentTag, previousTag, commits, githubNotes) {
     const header = [
@@ -31292,20 +31530,7 @@ function buildPrompt(currentTag, previousTag, commits, githubNotes) {
         "",
     ].join("\n");
     const commitBlocks = commits.length
-        ? commits.map((commit) => {
-            const diffLines = commit.diffLines.length
-                ? commit.diffLines
-                : ["(No diff content available)"];
-            const diffText = diffLines.map((line) => `- ${line}`).join("\n");
-            return [
-                `Commit ${commit.sha.slice(0, 7)}`,
-                "The following changes had this commit message:",
-                commit.message,
-                "",
-                "The changes in this commit were:",
-                diffText,
-            ].join("\n");
-        })
+        ? commits.map((commit) => formatCommitBlock(commit))
         : [
             "No commits were found between the previous and current tag.",
             "Write a short placeholder release note that explains there are no code changes.",

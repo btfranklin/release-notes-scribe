@@ -41,6 +41,14 @@ inputs:
     description: "Max commits to include in the prompt."
     required: false
     default: "200"
+  max_stage_chars:
+    description: "Max characters per summarization stage (approx 4 chars/token)."
+    required: false
+    default: "400000"
+  source_extensions:
+    description: "Comma/space-separated list of source code file extensions to diff (e.g. .ts,.py). Non-source files are filename-only."
+    required: false
+    default: ""
   draft:
     description: "Create the release as a draft."
     required: false
