@@ -147,4 +147,22 @@ describe("repo legibility", () => {
       "release instructions must preserve the semantic-tag workflow boundary"
     );
   });
+
+  it("keeps the JavaScript action runtime aligned with CI", () => {
+    requireText(
+      "action.yml",
+      'using: "node24"',
+      "GitHub Actions currently supports Node 24 for JavaScript actions"
+    );
+    requireText(
+      ".github/workflows/build.yml",
+      "node-version: 24",
+      "CI should build and test on the declared action runtime"
+    );
+    requireText(
+      "docs/architecture.md",
+      "Node 24",
+      "architecture docs should name the declared action runtime"
+    );
+  });
 });

@@ -8,7 +8,7 @@ Release Notes Scribe has three runtime responsibilities:
 
 ## Runtime Flow
 
-1. GitHub Actions loads `action.yml`, which points Node 20 at `dist/index.js`.
+1. GitHub Actions loads `action.yml`, which points Node 24 at `dist/index.js`.
 2. The bundled entrypoint mirrors `src/index.ts`.
 3. `src/index.ts` reads action inputs through `@actions/core`.
 4. Git helpers in `src/lib.ts` resolve the current tag, previous tag, commit

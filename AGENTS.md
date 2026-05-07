@@ -2,7 +2,7 @@
 
 ## Start Here
 
-Release Notes Scribe is a Node 20 GitHub Action that generates draft GitHub
+Release Notes Scribe is a Node 24 GitHub Action that generates draft GitHub
 release notes with the OpenAI Responses API.
 
 Use this file as the route map. Start deeper repo context at `docs/index.md`.
