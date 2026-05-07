@@ -116,6 +116,12 @@ describe("repo legibility", () => {
     for (const input of defaults) {
       expect(readmeDefault(input)).toBe(actionDefault(input));
     }
+
+    requireText(
+      "src/index.ts",
+      `core.getInput("model") || "${actionDefault("model")}"`,
+      "runtime fallback must match the documented action default"
+    );
   });
 
   it("documents and preserves the self-hosted release workflow contract", () => {

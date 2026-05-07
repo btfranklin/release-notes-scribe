@@ -31083,7 +31083,7 @@ async function run() {
     try {
         const apiKey = core.getInput("openai_api_key", { required: true });
         const baseUrl = core.getInput("openai_base_url") || undefined;
-        const model = core.getInput("model") || "gpt-5.4";
+        const model = core.getInput("model") || "gpt-5.5";
         const githubToken = core.getInput("github_token") || process.env.GITHUB_TOKEN;
         const inputTag = core.getInput("tag");
         const previousTagInput = core.getInput("previous_tag");
