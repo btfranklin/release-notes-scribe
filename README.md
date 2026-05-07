@@ -75,8 +75,11 @@ jobs:
 
 ```bash
 npm install
-npm test
+npm run check
 ```
+
+Maintainer and agent-facing architecture, validation, and release details live in
+[`docs/`](docs/index.md).
 
 ## Release
 

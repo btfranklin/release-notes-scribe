@@ -6,6 +6,8 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "ncc build src/index.ts -o dist",
+    "check": "npm run lint && npm test && npm run build",
+    "check:legibility": "vitest run tests/repo-legibility.test.ts",
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "release": "node scripts/release.mjs"
