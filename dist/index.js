@@ -30966,16 +30966,24 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.runAction = runAction;
 const core = __importStar(__nccwpck_require__(7484));
 const github_1 = __nccwpck_require__(3228);
 const openai_1 = __importDefault(__nccwpck_require__(2583));
 const lib_1 = __nccwpck_require__(5704);
-function getInputBoolean(name, defaultValue) {
-    const raw = core.getInput(name);
+function getInputBoolean(actionCore, name, defaultValue) {
+    const raw = actionCore.getInput(name);
     if (!raw) {
         return defaultValue;
     }
     return ["true", "1", "yes", "y", "on"].includes(raw.toLowerCase());
+}
+function parseExistingReleaseBehavior(input) {
+    const value = input || "update_draft";
+    if (["update_draft", "fail", "update_any"].includes(value)) {
+        return value;
+    }
+    throw new Error("existing_release_behavior must be one of: update_draft, fail, update_any.");
 }
 function parseSourceExtensions(input) {
     if (!input.trim()) {
@@ -31079,119 +31087,179 @@ async function generateResponseText(client, model, input, instructions, label) {
     }
     return text;
 }
+function isNotFoundError(error) {
+    return (typeof error === "object" &&
+        error !== null &&
+        "status" in error &&
+        error.status === 404);
+}
+async function getExistingRelease(octokit, actionContext, tag) {
+    try {
+        const release = await octokit.rest.repos.getReleaseByTag({
+            owner: actionContext.repo.owner,
+            repo: actionContext.repo.repo,
+            tag,
+        });
+        return release.data;
+    }
+    catch (error) {
+        if (isNotFoundError(error)) {
+            return null;
+        }
+        throw error;
+    }
+}
+async function writeRelease(octokit, actionContext, tag, releaseName, releaseNotes, draft, prerelease, behavior) {
+    const existingRelease = await getExistingRelease(octokit, actionContext, tag);
+    const request = {
+        owner: actionContext.repo.owner,
+        repo: actionContext.repo.repo,
+        tag_name: tag,
+        name: releaseName,
+        body: releaseNotes,
+        draft,
+        prerelease,
+        target_commitish: actionContext.sha,
+    };
+    if (!existingRelease) {
+        return (await octokit.rest.repos.createRelease(request)).data;
+    }
+    if (behavior === "fail") {
+        throw new Error(`Release ${tag} already exists.`);
+    }
+    if (behavior === "update_draft" && !existingRelease.draft) {
+        throw new Error(`Release ${tag} already exists and is not a draft. Set existing_release_behavior to update_any to update published releases.`);
+    }
+    return (await octokit.rest.repos.updateRelease({
+        ...request,
+        release_id: existingRelease.id,
+    })).data;
+}
+async function runAction(dependencies) {
+    const actionCore = dependencies.core;
+    const actionContext = dependencies.context;
+    const apiKey = actionCore.getInput("openai_api_key", { required: true });
+    const baseUrl = actionCore.getInput("openai_base_url") || undefined;
+    const model = actionCore.getInput("model") || "gpt-5.5";
+    const githubToken = actionCore.getInput("github_token") || dependencies.env.GITHUB_TOKEN;
+    const inputTag = actionCore.getInput("tag");
+    const previousTagInput = actionCore.getInput("previous_tag");
+    const includeGithubNotes = getInputBoolean(actionCore, "include_github_generated_notes", false);
+    const maxDiffLines = Number.parseInt(actionCore.getInput("max_diff_lines") || "120", 10);
+    const maxCommits = Number.parseInt(actionCore.getInput("max_commits") || "200", 10);
+    const maxStageChars = Number.parseInt(actionCore.getInput("max_stage_chars") || "400000", 10);
+    const sourceExtensions = parseSourceExtensions(actionCore.getInput("source_extensions"));
+    const draft = getInputBoolean(actionCore, "draft", true);
+    const prerelease = getInputBoolean(actionCore, "prerelease", false);
+    const createRelease = getInputBoolean(actionCore, "create_release", true);
+    const existingReleaseBehavior = parseExistingReleaseBehavior(actionCore.getInput("existing_release_behavior"));
+    const releaseNameOverride = actionCore.getInput("release_name");
+    if (!githubToken) {
+        throw new Error("No GitHub token provided. Set github_token input or GITHUB_TOKEN env var.");
+    }
+    if (Number.isNaN(maxDiffLines) || maxDiffLines < 1) {
+        throw new Error("max_diff_lines must be a positive integer.");
+    }
+    if (Number.isNaN(maxCommits) || maxCommits < 1) {
+        throw new Error("max_commits must be a positive integer.");
+    }
+    if (Number.isNaN(maxStageChars) || maxStageChars < 1000) {
+        throw new Error("max_stage_chars must be an integer >= 1000.");
+    }
+    const tag = inputTag || (0, lib_1.getTagFromRef)(actionContext.ref) || "";
+    if (!tag) {
+        throw new Error("No tag detected. Provide the 'tag' input or run on a tag push.");
+    }
+    if ((0, lib_1.isShallowRepository)()) {
+        actionCore.warning("Repository is shallow. Tag discovery may be incomplete; set actions/checkout fetch-depth: 0.");
+    }
+    const logger = {
+        info: actionCore.info,
+        warning: actionCore.warning,
+    };
+    const previousTag = (0, lib_1.resolvePreviousTag)(tag, previousTagInput, logger);
+    const commitShas = (0, lib_1.getCommitShas)(previousTag, tag, maxCommits, logger);
+    if (!commitShas.length) {
+        actionCore.warning("No commits found between tags; nothing to summarize.");
+    }
+    const commits = (0, lib_1.buildCommitData)(commitShas, maxDiffLines, logger, sourceExtensions);
+    const octokit = dependencies.getOctokit(githubToken);
+    let githubNotes = "";
+    if (includeGithubNotes) {
+        try {
+            const notes = await octokit.rest.repos.generateReleaseNotes({
+                owner: actionContext.repo.owner,
+                repo: actionContext.repo.repo,
+                tag_name: tag,
+                target_commitish: actionContext.sha,
+                ...(previousTag ? { previous_tag_name: previousTag } : {}),
+            });
+            githubNotes = notes.data.body ?? "";
+        }
+        catch (error) {
+            actionCore.warning(`Failed to fetch GitHub-generated notes: ${error}`);
+        }
+    }
+    const client = dependencies.createOpenAIClient({
+        apiKey,
+        baseURL: baseUrl,
+    });
+    const finalInstructions = "Write concise release notes in Markdown for end users. " +
+        "Use a '## What's Changed' heading and bullet points. " +
+        "Prefer user-facing changes over internal refactors. " +
+        "Do not include code fences.";
+    const stageInstructions = "Summarize the following commits into a concise Markdown bullet list. " +
+        "Focus on user-facing changes; mention notable internal changes briefly. " +
+        "Do not include code fences.";
+    const fullPrompt = (0, lib_1.buildPrompt)(tag, previousTag, commits, githubNotes);
+    let releaseNotes = "";
+    if (fullPrompt.length <= maxStageChars) {
+        releaseNotes = await generateResponseText(client, model, fullPrompt, finalInstructions, "final");
+    }
+    else {
+        const chunkBudget = Math.max(1000, maxStageChars - 2000);
+        const chunks = chunkCommits(commits, chunkBudget, logger);
+        const summaries = [];
+        actionCore.info(`Full prompt size ${fullPrompt.length} exceeds ${maxStageChars}. ` +
+            `Summarizing in ${chunks.length} batches.`);
+        for (let index = 0; index < chunks.length; index += 1) {
+            const chunkPrompt = buildSummaryPrompt(tag, previousTag, chunks[index]);
+            const summary = await generateResponseText(client, model, chunkPrompt, stageInstructions, `stage-${index + 1}`);
+            summaries.push(summary);
+        }
+        const finalPrompt = buildFinalPrompt(tag, previousTag, summaries, githubNotes);
+        releaseNotes = await generateResponseText(client, model, finalPrompt, finalInstructions, "final");
+    }
+    const releaseName = releaseNameOverride || tag;
+    if (!createRelease) {
+        actionCore.setOutput("release_notes", releaseNotes);
+        actionCore.setOutput("release_url", "");
+        actionCore.info("Release creation skipped because create_release is false.");
+        return;
+    }
+    const release = await writeRelease(octokit, actionContext, tag, releaseName, releaseNotes, draft, prerelease, existingReleaseBehavior);
+    actionCore.setOutput("release_notes", releaseNotes);
+    actionCore.setOutput("release_url", release.html_url ?? "");
+    actionCore.info(`Created or updated release ${releaseName} (${release.html_url ?? ""}).`);
+}
 async function run() {
     try {
-        const apiKey = core.getInput("openai_api_key", { required: true });
-        const baseUrl = core.getInput("openai_base_url") || undefined;
-        const model = core.getInput("model") || "gpt-5.5";
-        const githubToken = core.getInput("github_token") || process.env.GITHUB_TOKEN;
-        const inputTag = core.getInput("tag");
-        const previousTagInput = core.getInput("previous_tag");
-        const includeGithubNotes = getInputBoolean("include_github_generated_notes", false);
-        const maxDiffLines = Number.parseInt(core.getInput("max_diff_lines") || "120", 10);
-        const maxCommits = Number.parseInt(core.getInput("max_commits") || "200", 10);
-        const maxStageChars = Number.parseInt(core.getInput("max_stage_chars") || "400000", 10);
-        const sourceExtensions = parseSourceExtensions(core.getInput("source_extensions"));
-        const draft = getInputBoolean("draft", true);
-        const prerelease = getInputBoolean("prerelease", false);
-        const releaseNameOverride = core.getInput("release_name");
-        if (!githubToken) {
-            throw new Error("No GitHub token provided. Set github_token input or GITHUB_TOKEN env var.");
-        }
-        if (Number.isNaN(maxDiffLines) || maxDiffLines < 1) {
-            throw new Error("max_diff_lines must be a positive integer.");
-        }
-        if (Number.isNaN(maxCommits) || maxCommits < 1) {
-            throw new Error("max_commits must be a positive integer.");
-        }
-        if (Number.isNaN(maxStageChars) || maxStageChars < 1000) {
-            throw new Error("max_stage_chars must be an integer >= 1000.");
-        }
-        const tag = inputTag || (0, lib_1.getTagFromRef)(github_1.context.ref) || "";
-        if (!tag) {
-            throw new Error("No tag detected. Provide the 'tag' input or run on a tag push.");
-        }
-        if ((0, lib_1.isShallowRepository)()) {
-            core.warning("Repository is shallow. Tag discovery may be incomplete; set actions/checkout fetch-depth: 0.");
-        }
-        const logger = {
-            info: core.info,
-            warning: core.warning,
-        };
-        const previousTag = (0, lib_1.resolvePreviousTag)(tag, previousTagInput, logger);
-        const commitShas = (0, lib_1.getCommitShas)(previousTag, tag, maxCommits, logger);
-        if (!commitShas.length) {
-            core.warning("No commits found between tags; nothing to summarize.");
-        }
-        const commits = (0, lib_1.buildCommitData)(commitShas, maxDiffLines, logger, sourceExtensions);
-        const octokit = (0, github_1.getOctokit)(githubToken);
-        let githubNotes = "";
-        if (includeGithubNotes) {
-            try {
-                const notes = await octokit.rest.repos.generateReleaseNotes({
-                    owner: github_1.context.repo.owner,
-                    repo: github_1.context.repo.repo,
-                    tag_name: tag,
-                    target_commitish: github_1.context.sha,
-                    ...(previousTag ? { previous_tag_name: previousTag } : {}),
-                });
-                githubNotes = notes.data.body ?? "";
-            }
-            catch (error) {
-                core.warning(`Failed to fetch GitHub-generated notes: ${error}`);
-            }
-        }
-        const client = new openai_1.default({
-            apiKey,
-            baseURL: baseUrl,
+        await runAction({
+            core,
+            context: github_1.context,
+            env: process.env,
+            getOctokit: (token) => (0, github_1.getOctokit)(token),
+            createOpenAIClient: (options) => new openai_1.default(options),
         });
-        const finalInstructions = "Write concise release notes in Markdown for end users. " +
-            "Use a '## What's Changed' heading and bullet points. " +
-            "Prefer user-facing changes over internal refactors. " +
-            "Do not include code fences.";
-        const stageInstructions = "Summarize the following commits into a concise Markdown bullet list. " +
-            "Focus on user-facing changes; mention notable internal changes briefly. " +
-            "Do not include code fences.";
-        const fullPrompt = (0, lib_1.buildPrompt)(tag, previousTag, commits, githubNotes);
-        let releaseNotes = "";
-        if (fullPrompt.length <= maxStageChars) {
-            releaseNotes = await generateResponseText(client, model, fullPrompt, finalInstructions, "final");
-        }
-        else {
-            const chunkBudget = Math.max(1000, maxStageChars - 2000);
-            const chunks = chunkCommits(commits, chunkBudget, logger);
-            const summaries = [];
-            core.info(`Full prompt size ${fullPrompt.length} exceeds ${maxStageChars}. ` +
-                `Summarizing in ${chunks.length} batches.`);
-            for (let index = 0; index < chunks.length; index += 1) {
-                const chunkPrompt = buildSummaryPrompt(tag, previousTag, chunks[index]);
-                const summary = await generateResponseText(client, model, chunkPrompt, stageInstructions, `stage-${index + 1}`);
-                summaries.push(summary);
-            }
-            const finalPrompt = buildFinalPrompt(tag, previousTag, summaries, githubNotes);
-            releaseNotes = await generateResponseText(client, model, finalPrompt, finalInstructions, "final");
-        }
-        const releaseName = releaseNameOverride || tag;
-        const release = await octokit.rest.repos.createRelease({
-            owner: github_1.context.repo.owner,
-            repo: github_1.context.repo.repo,
-            tag_name: tag,
-            name: releaseName,
-            body: releaseNotes,
-            draft,
-            prerelease,
-            target_commitish: github_1.context.sha,
-        });
-        core.setOutput("release_notes", releaseNotes);
-        core.setOutput("release_url", release.data.html_url ?? "");
-        core.info(`Created release ${releaseName} (${release.data.html_url ?? ""}).`);
     }
     catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         core.setFailed(message);
     }
 }
-run();
+if (require.main === require.cache[eval('__filename')]) {
+    run();
+}
 
 
 /***/ }),
@@ -31216,6 +31284,7 @@ exports.buildPrompt = buildPrompt;
 exports.extractResponseText = extractResponseText;
 const node_child_process_1 = __nccwpck_require__(1421);
 const MAX_LINE_LENGTH = 300;
+const SEMANTIC_RELEASE_TAG = /^v\d+\.\d+\.\d+(?:[+-][0-9A-Za-z.-]+)?$/;
 exports.DEFAULT_SOURCE_EXTENSIONS = new Set([
     ".ts",
     ".tsx",
@@ -31305,6 +31374,20 @@ function listTags() {
     }
     return output.split("\n").map((tag) => tag.trim()).filter(Boolean);
 }
+function isSemanticReleaseTag(tag) {
+    return SEMANTIC_RELEASE_TAG.test(tag);
+}
+function isAncestor(ancestor, descendant) {
+    try {
+        (0, node_child_process_1.execFileSync)("git", ["merge-base", "--is-ancestor", ancestor, descendant], {
+            stdio: "ignore",
+        });
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
 function resolvePreviousTag(currentTag, override, logger = noopLogger) {
     if (override) {
         const overrideExists = runGit(["rev-parse", "-q", "--verify", `refs/tags/${override}`], { allowFailure: true });
@@ -31313,19 +31396,25 @@ function resolvePreviousTag(currentTag, override, logger = noopLogger) {
         }
         return override;
     }
+    const currentExists = runGit(["rev-parse", "-q", "--verify", `refs/tags/${currentTag}`], { allowFailure: true });
+    if (!currentExists) {
+        throw new Error(`Tag ${currentTag} not found in local tag list. Ensure tags are fetched.`);
+    }
     const tags = listTags();
     if (!tags.length) {
         throw new Error("No tags found locally. Ensure actions/checkout uses fetch-depth: 0.");
     }
-    const index = tags.indexOf(currentTag);
-    if (index === -1) {
-        throw new Error(`Tag ${currentTag} not found in local tag list. Ensure tags are fetched.`);
-    }
-    if (index + 1 >= tags.length) {
+    const candidates = tags.filter((tag) => tag !== currentTag && isSemanticReleaseTag(tag) && isAncestor(tag, currentTag));
+    if (!candidates.length) {
         logger.info("No previous tag found; comparing against the empty tree.");
         return "";
     }
-    return tags[index + 1];
+    return candidates
+        .map((tag) => ({
+        tag,
+        distance: Number.parseInt(runGit(["rev-list", "--count", `${tag}..${currentTag}`]), 10),
+    }))
+        .sort((left, right) => left.distance - right.distance)[0].tag;
 }
 function getCommitShas(previousTag, currentTag, maxCommits, logger = noopLogger) {
     const range = previousTag ? `${previousTag}..${currentTag}` : currentTag;

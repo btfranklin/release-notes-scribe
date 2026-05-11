@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 
 const MAX_LINE_LENGTH = 300;
+const SEMANTIC_RELEASE_TAG = /^v\d+\.\d+\.\d+(?:[+-][0-9A-Za-z.-]+)?$/;
 
 export const DEFAULT_SOURCE_EXTENSIONS = new Set([
   ".ts",
@@ -124,6 +125,21 @@ export function listTags(): string[] {
   return output.split("\n").map((tag) => tag.trim()).filter(Boolean);
 }
 
+function isSemanticReleaseTag(tag: string): boolean {
+  return SEMANTIC_RELEASE_TAG.test(tag);
+}
+
+function isAncestor(ancestor: string, descendant: string): boolean {
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", ancestor, descendant], {
+      stdio: "ignore",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function resolvePreviousTag(
   currentTag: string,
   override: string,
@@ -142,6 +158,16 @@ export function resolvePreviousTag(
     return override;
   }
 
+  const currentExists = runGit(
+    ["rev-parse", "-q", "--verify", `refs/tags/${currentTag}`],
+    { allowFailure: true }
+  );
+  if (!currentExists) {
+    throw new Error(
+      `Tag ${currentTag} not found in local tag list. Ensure tags are fetched.`
+    );
+  }
+
   const tags = listTags();
   if (!tags.length) {
     throw new Error(
@@ -149,19 +175,24 @@ export function resolvePreviousTag(
     );
   }
 
-  const index = tags.indexOf(currentTag);
-  if (index === -1) {
-    throw new Error(
-      `Tag ${currentTag} not found in local tag list. Ensure tags are fetched.`
-    );
-  }
-
-  if (index + 1 >= tags.length) {
+  const candidates = tags.filter(
+    (tag) =>
+      tag !== currentTag && isSemanticReleaseTag(tag) && isAncestor(tag, currentTag)
+  );
+  if (!candidates.length) {
     logger.info("No previous tag found; comparing against the empty tree.");
     return "";
   }
 
-  return tags[index + 1];
+  return candidates
+    .map((tag) => ({
+      tag,
+      distance: Number.parseInt(
+        runGit(["rev-list", "--count", `${tag}..${currentTag}`]),
+        10
+      ),
+    }))
+    .sort((left, right) => left.distance - right.distance)[0].tag;
 }
 
 export function getCommitShas(

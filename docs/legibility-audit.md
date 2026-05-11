@@ -17,23 +17,22 @@
 - Shortened `AGENTS.md` into a route map instead of a mixed encyclopedia.
 - Added `tests/repo-legibility.test.ts` to enforce docs routing and important
   workflow/default alignment.
+- Added action orchestration coverage with mocked OpenAI and GitHub clients.
+- Made automatic previous-tag discovery graph-aware and semantic-release only.
+- Added output-only generation and rerun-safe draft release updates.
 
 ## Remaining Gaps
 
 - Prompt wording still lives inline in `src/index.ts`. That is acceptable while
   the prompts are short, but reusable prompt files would be more legible if the
   release-note policy grows.
-- There is no integration test that mocks OpenAI and GitHub API calls through
-  the full `src/index.ts` action path.
 - There is no generated inventory for action inputs and README docs. The current
   legibility test covers the highest-risk defaults, but a generated reference
   would scale better if the input surface grows.
 
 ## Next Investments
 
-1. Add a full action integration test with mocked OpenAI and GitHub clients if
-   orchestration logic grows.
-2. Move longer prompt instructions into versioned prompt files if prompt policy
+1. Move longer prompt instructions into versioned prompt files if prompt policy
    becomes more complex or repeated.
-3. Generate an input/output reference from `action.yml` and check README
+2. Generate an input/output reference from `action.yml` and check README
    freshness from that generated artifact.

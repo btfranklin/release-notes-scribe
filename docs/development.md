@@ -29,7 +29,8 @@ any intended `dist/` changes. CI fails when build output is stale.
 
 - `tests/release-notes.test.ts` creates temporary git repositories to verify tag
   discovery, commit range selection, prompt formatting, non-source summaries,
-  and response text extraction.
+  response text extraction, and action orchestration with mocked OpenAI and
+  GitHub clients.
 - `tests/repo-legibility.test.ts` keeps the agent-facing documentation and key
   action metadata aligned.
 

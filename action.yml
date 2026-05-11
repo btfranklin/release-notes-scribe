@@ -57,6 +57,14 @@ inputs:
     description: "Mark the release as a prerelease."
     required: false
     default: "false"
+  create_release:
+    description: "Create or update a GitHub Release. Set to false to only generate release_notes output."
+    required: false
+    default: "true"
+  existing_release_behavior:
+    description: "What to do when a release for the tag already exists: update_draft, fail, or update_any."
+    required: false
+    default: "update_draft"
   release_name:
     description: "Override the release title. Defaults to the tag."
     required: false

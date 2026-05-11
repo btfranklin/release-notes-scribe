@@ -111,6 +111,8 @@ describe("repo legibility", () => {
       "max_stage_chars",
       "draft",
       "prerelease",
+      "create_release",
+      "existing_release_behavior",
     ];
 
     for (const input of defaults) {
@@ -119,8 +121,18 @@ describe("repo legibility", () => {
 
     requireText(
       "src/index.ts",
-      `core.getInput("model") || "${actionDefault("model")}"`,
+      `getInput("model") || "${actionDefault("model")}"`,
       "runtime fallback must match the documented action default"
+    );
+    requireText(
+      "docs/architecture.md",
+      "existing_release_behavior",
+      "rerun behavior is part of the public action contract"
+    );
+    requireText(
+      "docs/architecture.md",
+      "create_release: false",
+      "output-only generation is part of the public action contract"
     );
   });
 

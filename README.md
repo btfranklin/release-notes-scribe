@@ -56,6 +56,8 @@ jobs:
 - `source_extensions`: Comma/space-separated list of source code extensions to include diffs for. Non-source files are filename-only. Default: built-in language list.
 - `draft`: Create the release as a draft. Default: `true`.
 - `prerelease`: Mark release as prerelease. Default: `false`.
+- `create_release`: Create or update a GitHub Release. Set to `false` to only generate the `release_notes` output. Default: `true`.
+- `existing_release_behavior`: What to do when a release for the tag already exists. Options: `update_draft`, `fail`, `update_any`. Default: `update_draft`.
 - `release_name`: Override release title. Defaults to the tag.
 
 ## Outputs
@@ -70,6 +72,8 @@ jobs:
 - If no previous tag is found, the action compares against the empty tree.
 - For tag-triggered workflows, prefer `v*.*.*` so moving major tags like `v1` don't trigger runs.
 - Large releases are summarized in multiple stages to stay within prompt limits.
+- Automatic previous-tag discovery uses the nearest reachable semantic release tag and ignores moving major tags.
+- Reruns update an existing draft release by default and fail rather than editing a published release.
 
 ## Testing
 

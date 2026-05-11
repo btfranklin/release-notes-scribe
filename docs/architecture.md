@@ -2,7 +2,7 @@
 
 Release Notes Scribe has three runtime responsibilities:
 
-1. Discover the release range from Git tags.
+1. Discover the release range from reachable semantic Git tags.
 2. Convert commits and diffs into a bounded prompt for the Responses API.
 3. Create a draft GitHub Release with the generated Markdown.
 
@@ -18,7 +18,9 @@ Release Notes Scribe has three runtime responsibilities:
 6. The OpenAI client calls the Responses API.
 7. If the prompt exceeds `max_stage_chars`, commits are summarized in batches
    before a final release-note prompt is built.
-8. `@actions/github` creates the draft release and action outputs are set.
+8. If `create_release` is enabled, `@actions/github` creates the release or
+   updates an existing release according to `existing_release_behavior`.
+9. Action outputs are set.
 
 ## Module Boundaries
 
@@ -39,8 +41,14 @@ action inputs, secrets, OpenAI, or GitHub API side effects.
 ## Important Contracts
 
 - Tags are expected to follow semantic release tags such as `v1.2.3`.
+- Automatic previous-tag discovery ignores non-semantic tags and moving major
+  tags such as `v1`.
 - Workflows must use `actions/checkout` with `fetch-depth: 0`; tag discovery is
   unreliable in shallow clones.
+- Reruns update an existing draft release by default, but do not edit published
+  releases unless `existing_release_behavior` is set to `update_any`.
+- `create_release: false` still generates `release_notes` but skips GitHub
+  release lookup, create, and update calls.
 - `source_extensions` controls which file diffs are included. Non-source files
   are summarized by filename to avoid noisy prompts.
 - The generated `dist/index.js` bundle is committed because GitHub Actions runs
