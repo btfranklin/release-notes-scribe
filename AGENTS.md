@@ -18,8 +18,12 @@ Use this file as the route map. Start deeper repo context at `docs/index.md`.
 
 ## Key Files
 
-- `src/index.ts`: action entrypoint; reads inputs, calls OpenAI, creates releases.
-- `src/lib.ts`: git inspection and prompt helpers; unit-testable core logic.
+- `src/index.ts`: action entrypoint; reads inputs, calls OpenAI, writes releases
+  and outputs.
+- `src/lib.ts`: git inspection, redaction, prompt helpers, and response parsing.
+- `src/prompts/`: Markdown prompt instructions copied into the action bundle.
+- `scripts/update-readme-reference.mjs`: regenerates the README action reference
+  from `action.yml`.
 - `tests/`: Vitest coverage for release-note behavior and repo legibility.
 - `dist/index.js`: generated ncc bundle; commit it after action code changes.
 - `.github/workflows/build.yml`: CI validation and dist freshness gate.
@@ -33,5 +37,6 @@ Use this file as the route map. Start deeper repo context at `docs/index.md`.
 - Build bundle: `npm run build`
 - Full local check: `npm run check`
 
-After changing `src/` or `action.yml`, run `npm run build` and commit the
+After changing `action.yml`, run `npm run docs:reference`. After changing
+`src/`, `src/prompts/`, or action metadata, run `npm run build` and commit the
 updated `dist/` output.

@@ -96,7 +96,7 @@ describe("repo legibility", () => {
     requireText(
       "AGENTS.md",
       "Current legibility guardrails",
-      "AGENTS.md should not imply an open improvement backlog"
+      "AGENTS.md should route to current-state guardrails"
     );
     requireText(
       "docs/index.md",
@@ -218,7 +218,7 @@ describe("repo legibility", () => {
     }
   });
 
-  it("does not keep completed improvement items in the current docs backlog", () => {
+  it("keeps the legibility audit focused on current state", () => {
     const audit = read("docs/legibility-audit.md");
 
     expect(audit).not.toContain("Remaining Gaps");

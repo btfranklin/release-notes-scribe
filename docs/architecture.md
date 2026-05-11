@@ -4,7 +4,7 @@ Release Notes Scribe has three runtime responsibilities:
 
 1. Discover the release range from reachable semantic Git tags.
 2. Convert commits and diffs into a bounded prompt for the Responses API.
-3. Create a draft GitHub Release with the generated Markdown.
+3. Publish, update, or output the generated Markdown according to action inputs.
 
 ## Runtime Flow
 
@@ -18,9 +18,9 @@ Release Notes Scribe has three runtime responsibilities:
 6. Likely secrets are redacted from commit messages, diff lines, and
    GitHub-generated notes unless `redact_secrets` is disabled.
 7. Prompt instructions are loaded from Markdown assets in `src/prompts/`.
-8. The OpenAI client calls the Responses API.
-9. If the prompt exceeds `max_stage_chars`, commits are summarized in batches
+8. If the prompt exceeds `max_stage_chars`, commits are summarized in batches
    before a final release-note prompt is built.
+9. The OpenAI client calls the Responses API for the final release notes.
 10. If `create_release` is enabled, `@actions/github` creates the release or
    updates an existing release according to `existing_release_behavior`.
 11. Action outputs, including diagnostics, are set.

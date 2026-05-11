@@ -26,6 +26,11 @@ That command runs:
 After source or action metadata changes, inspect `git status --short` and commit
 any intended `dist/` changes. CI fails when build output is stale.
 
+When `action.yml` changes, run `npm run docs:reference` before validation so the
+README input/output reference stays generated from the action metadata. When
+`src/prompts/` changes, run `npm run build` so `dist/prompts/` is refreshed with
+the bundled action.
+
 ## Test Shape
 
 - `tests/release-notes.test.ts` creates temporary git repositories to verify tag
