@@ -19,6 +19,7 @@ npm run check
 That command runs:
 
 - `npm run lint`: TypeScript type-checking.
+- `npm run docs:reference:check`: README action reference freshness.
 - `npm test`: Vitest unit tests, including repo-legibility checks.
 - `npm run build`: ncc bundle generation into `dist/`.
 
@@ -32,7 +33,8 @@ any intended `dist/` changes. CI fails when build output is stale.
   response text extraction, and action orchestration with mocked OpenAI and
   GitHub clients.
 - `tests/repo-legibility.test.ts` keeps the agent-facing documentation and key
-  action metadata aligned.
+  action metadata aligned, including the generated README action reference and
+  bundled prompt assets.
 
 When adding behavior, prefer tests that assert the contract a user or maintainer
 depends on. Avoid tests that only mirror incidental implementation details.

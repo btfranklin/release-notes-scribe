@@ -1,3 +1,5 @@
+import { readFileSync } from "fs";
+import { join } from "path";
 import * as core from "@actions/core";
 import { context, getOctokit } from "@actions/github";
 import OpenAI from "openai";
@@ -10,6 +12,8 @@ import {
   getCommitShas,
   getTagFromRef,
   isShallowRepository,
+  redactCommitData,
+  redactPossibleSecrets,
   resolvePreviousTag,
 } from "./lib";
 
@@ -127,6 +131,41 @@ function parseSourceExtensions(input: string): Set<string> {
       value.startsWith(".") ? value.toLowerCase() : `.${value.toLowerCase()}`
     );
   return new Set(values);
+}
+
+const FINAL_RELEASE_PROMPT = readFileSync(
+  join(__dirname, "prompts", "final-release.md"),
+  "utf8"
+).trim();
+const STAGE_SUMMARY_PROMPT = readFileSync(
+  join(__dirname, "prompts", "stage-summary.md"),
+  "utf8"
+).trim();
+
+function loadPrompt(name: string): string {
+  switch (name) {
+    case "final-release.md":
+      return FINAL_RELEASE_PROMPT;
+    case "stage-summary.md":
+      return STAGE_SUMMARY_PROMPT;
+    default:
+      throw new Error(`Unknown prompt asset: ${name}`);
+  }
+}
+
+function setDiagnosticOutputs(
+  actionCore: Pick<ActionCore, "setOutput">,
+  previousTag: string,
+  commitCount: number,
+  promptCharCount: number,
+  usedBatching: boolean,
+  redactionCount: number
+): void {
+  actionCore.setOutput("previous_tag", previousTag);
+  actionCore.setOutput("commit_count", String(commitCount));
+  actionCore.setOutput("prompt_char_count", String(promptCharCount));
+  actionCore.setOutput("used_batching", String(usedBatching));
+  actionCore.setOutput("redaction_count", String(redactionCount));
 }
 
 function trimText(text: string, maxLength: number): string {
@@ -353,6 +392,7 @@ export async function runAction(dependencies: ActionDependencies): Promise<void>
     "include_github_generated_notes",
     false
   );
+  const redactSecrets = getInputBoolean(actionCore, "redact_secrets", true);
   const maxDiffLines = Number.parseInt(
     actionCore.getInput("max_diff_lines") || "120",
     10
@@ -439,23 +479,40 @@ export async function runAction(dependencies: ActionDependencies): Promise<void>
     }
   }
 
+  let promptCommits = commits;
+  let promptGithubNotes = githubNotes;
+  let redactionCount = 0;
+  if (redactSecrets) {
+    const redactedCommits = redactCommitData(commits);
+    const redactedGithubNotes = redactPossibleSecrets(githubNotes);
+    promptCommits = redactedCommits.commits;
+    promptGithubNotes = redactedGithubNotes.text;
+    redactionCount = redactedCommits.count + redactedGithubNotes.count;
+
+    if (redactionCount > 0) {
+      actionCore.warning(
+        `Possible secret detected; redacted ${redactionCount} value(s) before transmission to OpenAI.`
+      );
+    }
+  }
+
   const client = dependencies.createOpenAIClient({
     apiKey,
     baseURL: baseUrl,
   });
 
-  const finalInstructions =
-    "Write concise release notes in Markdown for end users. " +
-    "Use a '## What's Changed' heading and bullet points. " +
-    "Prefer user-facing changes over internal refactors. " +
-    "Do not include code fences.";
-  const stageInstructions =
-    "Summarize the following commits into a concise Markdown bullet list. " +
-    "Focus on user-facing changes; mention notable internal changes briefly. " +
-    "Do not include code fences.";
+  const finalInstructions = loadPrompt("final-release.md");
+  const stageInstructions = loadPrompt("stage-summary.md");
 
-  const fullPrompt = buildPrompt(tag, previousTag, commits, githubNotes);
+  const fullPrompt = buildPrompt(
+    tag,
+    previousTag,
+    promptCommits,
+    promptGithubNotes
+  );
   let releaseNotes = "";
+  let promptCharCount = fullPrompt.length;
+  let usedBatching = false;
 
   if (fullPrompt.length <= maxStageChars) {
     releaseNotes = await generateResponseText(
@@ -466,8 +523,9 @@ export async function runAction(dependencies: ActionDependencies): Promise<void>
       "final"
     );
   } else {
+    usedBatching = true;
     const chunkBudget = Math.max(1000, maxStageChars - 2000);
-    const chunks = chunkCommits(commits, chunkBudget, logger);
+    const chunks = chunkCommits(promptCommits, chunkBudget, logger);
     const summaries: string[] = [];
 
     actionCore.info(
@@ -491,8 +549,9 @@ export async function runAction(dependencies: ActionDependencies): Promise<void>
       tag,
       previousTag,
       summaries,
-      githubNotes
+      promptGithubNotes
     );
+    promptCharCount = finalPrompt.length;
     releaseNotes = await generateResponseText(
       client,
       model,
@@ -507,6 +566,14 @@ export async function runAction(dependencies: ActionDependencies): Promise<void>
   if (!createRelease) {
     actionCore.setOutput("release_notes", releaseNotes);
     actionCore.setOutput("release_url", "");
+    setDiagnosticOutputs(
+      actionCore,
+      previousTag,
+      commitShas.length,
+      promptCharCount,
+      usedBatching,
+      redactionCount
+    );
     actionCore.info(
       "Release creation skipped because create_release is false."
     );
@@ -525,6 +592,14 @@ export async function runAction(dependencies: ActionDependencies): Promise<void>
   );
   actionCore.setOutput("release_notes", releaseNotes);
   actionCore.setOutput("release_url", release.html_url ?? "");
+  setDiagnosticOutputs(
+    actionCore,
+    previousTag,
+    commitShas.length,
+    promptCharCount,
+    usedBatching,
+    redactionCount
+  );
 
   actionCore.info(`Created or updated release ${releaseName} (${release.html_url ?? ""}).`);
 }

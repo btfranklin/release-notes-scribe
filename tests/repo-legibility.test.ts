@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -90,7 +91,17 @@ describe("repo legibility", () => {
     requireText(
       "docs/index.md",
       "docs/legibility-audit.md",
-      "the current legibility backlog should be discoverable"
+      "the current legibility guardrails should be discoverable"
+    );
+    requireText(
+      "AGENTS.md",
+      "Current legibility guardrails",
+      "AGENTS.md should not imply an open improvement backlog"
+    );
+    requireText(
+      "docs/index.md",
+      "npm run docs:reference",
+      "README action reference generation should be documented"
     );
   });
 
@@ -113,6 +124,7 @@ describe("repo legibility", () => {
       "prerelease",
       "create_release",
       "existing_release_behavior",
+      "redact_secrets",
     ];
 
     for (const input of defaults) {
@@ -134,6 +146,18 @@ describe("repo legibility", () => {
       "create_release: false",
       "output-only generation is part of the public action contract"
     );
+    requireText(
+      "docs/architecture.md",
+      "redact_secrets",
+      "redaction behavior is part of the public action contract"
+    );
+  });
+
+  it("keeps README action reference generated from action.yml", () => {
+    execFileSync("node", ["scripts/update-readme-reference.mjs", "--check"], {
+      cwd: root,
+      stdio: "pipe",
+    });
   });
 
   it("documents and preserves the self-hosted release workflow contract", () => {
@@ -176,5 +200,30 @@ describe("repo legibility", () => {
       "Node 24",
       "architecture docs should name the declared action runtime"
     );
+  });
+
+  it("keeps prompt assets discoverable in source and dist", () => {
+    const prompts = ["final-release.md", "stage-summary.md"];
+
+    for (const prompt of prompts) {
+      const source = read(`src/prompts/${prompt}`).trim();
+      const distPromptPath = join(root, "dist", "prompts", prompt);
+      const distIndex = read("dist/index.js");
+      const bundledAsset = existsSync(distPromptPath)
+        ? readFileSync(distPromptPath, "utf8").trim()
+        : "";
+
+      expect(source.length).toBeGreaterThan(20);
+      expect(distIndex.includes(source) || bundledAsset === source).toBe(true);
+    }
+  });
+
+  it("does not keep completed improvement items in the current docs backlog", () => {
+    const audit = read("docs/legibility-audit.md");
+
+    expect(audit).not.toContain("Remaining Gaps");
+    expect(audit).not.toContain("Next Investments");
+    expect(audit).not.toContain("generated inventory");
+    expect(audit).not.toContain("prompt policy grows");
   });
 });

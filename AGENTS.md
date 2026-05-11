@@ -13,7 +13,7 @@ Use this file as the route map. Start deeper repo context at `docs/index.md`.
 - Architecture and code boundaries: read `docs/architecture.md`.
 - Local setup, validation, and release mechanics: read `docs/development.md`.
 - Release ordering with this action dogfooding itself: read `docs/releasing.md`.
-- Current legibility gaps and follow-up work: read `docs/legibility-audit.md`.
+- Current legibility guardrails and implemented reliability work: read `docs/legibility-audit.md`.
 - Action inputs, outputs, and runtime metadata: inspect `action.yml`.
 
 ## Key Files

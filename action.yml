@@ -33,6 +33,10 @@ inputs:
     description: "Include GitHub-generated release notes as extra context for the model."
     required: false
     default: "false"
+  redact_secrets:
+    description: "Redact likely secrets before sending release context to OpenAI."
+    required: false
+    default: "true"
   max_diff_lines:
     description: "Max diff lines per commit to include in the prompt."
     required: false
@@ -75,6 +79,16 @@ outputs:
     description: "Generated release notes in Markdown."
   release_url:
     description: "URL of the created GitHub release."
+  previous_tag:
+    description: "Resolved previous tag, or an empty string when comparing against the empty tree."
+  commit_count:
+    description: "Number of commits included after max_commits truncation."
+  prompt_char_count:
+    description: "Character count of the prompt used for the final OpenAI response."
+  used_batching:
+    description: "Whether the action summarized commits in batches before final release-note generation."
+  redaction_count:
+    description: "Number of likely secrets redacted before sending context to OpenAI."
 
 runs:
   using: "node24"

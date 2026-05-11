@@ -41,29 +41,37 @@ jobs:
           include_github_generated_notes: "true"
 ```
 
+<!-- action-reference:start -->
 ## Inputs
 
-- `openai_api_key` (required): API key for an OpenAI-compatible provider.
+- `openai_api_key`(required): OpenAI-compatible API key (Responses API required).
 - `openai_base_url`: Optional base URL for OpenAI-compatible providers.
-- `model`: Model name (must support Responses API). Default: `gpt-5.5`.
-- `github_token`: Token with `contents:write` permission. Defaults to `GITHUB_TOKEN` env var.
-- `tag`: Override tag. Defaults to the tag that triggered the workflow.
-- `previous_tag`: Override previous tag for comparison.
-- `include_github_generated_notes`: Add GitHub-generated notes as extra context. Default: `false`.
-- `max_diff_lines`: Max diff lines per commit in prompt. Default: `120`.
-- `max_commits`: Max commits to include. Default: `200`.
+- `model`: Model name (must support OpenAI Responses API). Default: `gpt-5.5`.
+- `github_token`: GitHub token with contents:write permissions. Defaults to GITHUB_TOKEN env var.
+- `tag`: Release tag. Defaults to the tag that triggered the workflow.
+- `previous_tag`: Override the previous tag for comparison.
+- `include_github_generated_notes`: Include GitHub-generated release notes as extra context for the model. Default: `false`.
+- `redact_secrets`: Redact likely secrets before sending release context to OpenAI. Default: `true`.
+- `max_diff_lines`: Max diff lines per commit to include in the prompt. Default: `120`.
+- `max_commits`: Max commits to include in the prompt. Default: `200`.
 - `max_stage_chars`: Max characters per summarization stage (approx 4 chars/token). Default: `400000`.
-- `source_extensions`: Comma/space-separated list of source code extensions to include diffs for. Non-source files are filename-only. Default: built-in language list.
+- `source_extensions`: Comma/space-separated list of source code file extensions to diff (e.g. .ts,.py). Non-source files are filename-only.
 - `draft`: Create the release as a draft. Default: `true`.
-- `prerelease`: Mark release as prerelease. Default: `false`.
-- `create_release`: Create or update a GitHub Release. Set to `false` to only generate the `release_notes` output. Default: `true`.
-- `existing_release_behavior`: What to do when a release for the tag already exists. Options: `update_draft`, `fail`, `update_any`. Default: `update_draft`.
-- `release_name`: Override release title. Defaults to the tag.
+- `prerelease`: Mark the release as a prerelease. Default: `false`.
+- `create_release`: Create or update a GitHub Release. Set to false to only generate release_notes output. Default: `true`.
+- `existing_release_behavior`: What to do when a release for the tag already exists: update_draft, fail, or update_any. Default: `update_draft`.
+- `release_name`: Override the release title. Defaults to the tag.
 
 ## Outputs
 
-- `release_notes`: Generated Markdown.
-- `release_url`: URL of the created release.
+- `release_notes`: Generated release notes in Markdown.
+- `release_url`: URL of the created GitHub release.
+- `previous_tag`: Resolved previous tag, or an empty string when comparing against the empty tree.
+- `commit_count`: Number of commits included after max_commits truncation.
+- `prompt_char_count`: Character count of the prompt used for the final OpenAI response.
+- `used_batching`: Whether the action summarized commits in batches before final release-note generation.
+- `redaction_count`: Number of likely secrets redacted before sending context to OpenAI.
+<!-- action-reference:end -->
 
 ## Notes
 
@@ -74,6 +82,7 @@ jobs:
 - Large releases are summarized in multiple stages to stay within prompt limits.
 - Automatic previous-tag discovery uses the nearest reachable semantic release tag and ignores moving major tags.
 - Reruns update an existing draft release by default and fail rather than editing a published release.
+- Likely secrets are redacted before release context is sent to OpenAI by default.
 
 ## Testing
 

@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 
 const MAX_LINE_LENGTH = 300;
 const SEMANTIC_RELEASE_TAG = /^v\d+\.\d+\.\d+(?:[+-][0-9A-Za-z.-]+)?$/;
+export const REDACTION_PLACEHOLDER = "[REDACTED POSSIBLE SECRET]";
 
 export const DEFAULT_SOURCE_EXTENSIONS = new Set([
   ".ts",
@@ -48,6 +49,16 @@ export type CommitData = {
   diffLines: string[];
 };
 
+export type RedactionResult = {
+  text: string;
+  count: number;
+};
+
+export type RedactedCommitData = {
+  commits: CommitData[];
+  count: number;
+};
+
 type FileStat = {
   path: string;
   isBinary: boolean;
@@ -63,6 +74,53 @@ const noopLogger: Logger = {
   info: () => {},
   warning: () => {},
 };
+
+type RedactionPattern = {
+  pattern: RegExp;
+  replace: (...args: any[]) => string;
+};
+
+const REDACTION_PATTERNS: RedactionPattern[] = [
+  {
+    pattern:
+      /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g,
+    replace: () => REDACTION_PLACEHOLDER,
+  },
+  {
+    pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
+    replace: () => REDACTION_PLACEHOLDER,
+  },
+  {
+    pattern: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}\b/g,
+    replace: () => REDACTION_PLACEHOLDER,
+  },
+  {
+    pattern: /\bsk-(?:proj-|live-|test-)?[A-Za-z0-9_-]{20,}\b/g,
+    replace: () => REDACTION_PLACEHOLDER,
+  },
+  {
+    pattern: /\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b/g,
+    replace: () => REDACTION_PLACEHOLDER,
+  },
+  {
+    pattern: /\bwhsec_[A-Za-z0-9]{16,}\b/g,
+    replace: () => REDACTION_PLACEHOLDER,
+  },
+  {
+    pattern: /\bBearer\s+[A-Za-z0-9._~+/=-]{20,}\b/gi,
+    replace: () => `Bearer ${REDACTION_PLACEHOLDER}`,
+  },
+  {
+    pattern:
+      /\b([A-Za-z0-9_-]*(?:API[_-]?KEY|ACCESS[_-]?TOKEN|AUTH[_-]?TOKEN|TOKEN|SECRET|WEBHOOK[_-]?SECRET|CLIENT[_-]?SECRET|PRIVATE[_-]?KEY|PASSWORD)[A-Za-z0-9_-]*)(\s*[:=]\s*)(["']?)([^"'\s]{12,})\3/gi,
+    replace: (
+      _match: string,
+      name: string,
+      separator: string,
+      quote: string
+    ) => `${name}${separator}${quote}${REDACTION_PLACEHOLDER}${quote}`,
+  },
+];
 
 type GitCommandOptions = {
   allowFailure?: boolean;
@@ -214,6 +272,41 @@ export function getCommitShas(
     return commits.slice(commits.length - maxCommits);
   }
   return commits;
+}
+
+export function redactPossibleSecrets(text: string): RedactionResult {
+  let result = text;
+  let count = 0;
+
+  for (const { pattern, replace } of REDACTION_PATTERNS) {
+    result = result.replace(pattern, (...args) => {
+      count += 1;
+      return replace(...args);
+    });
+  }
+
+  return { text: result, count };
+}
+
+export function redactCommitData(commits: CommitData[]): RedactedCommitData {
+  let count = 0;
+  const redactedCommits = commits.map((commit) => {
+    const message = redactPossibleSecrets(commit.message);
+    const diffLines = commit.diffLines.map((line) => {
+      const redacted = redactPossibleSecrets(line);
+      count += redacted.count;
+      return redacted.text;
+    });
+    count += message.count;
+
+    return {
+      ...commit,
+      message: message.text,
+      diffLines,
+    };
+  });
+
+  return { commits: redactedCommits, count };
 }
 
 function formatFileStatus(status: string): string {

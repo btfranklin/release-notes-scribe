@@ -3,37 +3,32 @@
 ## Current Strengths
 
 - The repository is small and has a clear action surface in `action.yml`.
-- Runtime code is split between orchestration in `src/index.ts` and testable git
-  and prompt helpers in `src/lib.ts`.
-- CI already checks tests, build output, and committed `dist/` freshness.
+- Runtime code is split between orchestration in `src/index.ts` and testable git,
+  redaction, response extraction, and prompt helpers in `src/lib.ts`.
+- Prompt instructions live in versioned Markdown assets under `src/prompts/`,
+  are copied into `dist/prompts/`, and are checked for bundle availability.
+- CI checks tests, generated README action reference freshness, build output,
+  and committed `dist/` freshness.
 - The release workflow dogfoods the action with `uses: ./`.
 
-## Fixed In This Pass
+## Guardrails In Place
 
-- Added `docs/index.md` as the maintainer and agent documentation entry point.
-- Added `docs/architecture.md` so agents can see runtime flow, module ownership,
-  and external boundaries without reconstructing them from source.
-- Added `docs/development.md` for setup, validation, CI, and release mechanics.
-- Shortened `AGENTS.md` into a route map instead of a mixed encyclopedia.
-- Added `tests/repo-legibility.test.ts` to enforce docs routing and important
-  workflow/default alignment.
-- Added action orchestration coverage with mocked OpenAI and GitHub clients.
-- Made automatic previous-tag discovery graph-aware and semantic-release only.
-- Added output-only generation and rerun-safe draft release updates.
+- `docs/index.md` is the maintainer and agent documentation entry point.
+- `docs/architecture.md` records runtime flow, module ownership, public action
+  contracts, and external boundaries.
+- `docs/development.md` records setup, validation, CI, and release mechanics.
+- `AGENTS.md` stays short enough to be a route map.
+- `tests/repo-legibility.test.ts` enforces documentation routing, generated
+  README reference freshness, runtime/default alignment, prompt asset bundling,
+  and release workflow contracts.
 
-## Remaining Gaps
+## Implemented Reliability Work
 
-- Prompt wording still lives inline in `src/index.ts`. That is acceptable while
-  the prompts are short. If the release-note policy grows, move reusable prompt
-  text into versioned Markdown templates bundled into `dist/`, or TypeScript
-  prompt modules.
-- There is no generated inventory for action inputs and README docs. The current
-  legibility test covers the highest-risk defaults, but a generated reference
-  would scale better if the input surface grows.
-
-## Next Investments
-
-1. Move longer prompt instructions into versioned Markdown templates or
-   TypeScript prompt modules if prompt policy becomes more complex or repeated.
-2. Generate an input/output reference from `action.yml` and check README
-   freshness from that generated artifact.
+- Automatic previous-tag discovery is graph-aware and semantic-release only.
+- Reruns update existing draft releases by default and avoid editing published
+  releases unless explicitly configured.
+- `create_release: false` supports output-only release-note generation.
+- Likely secrets are redacted before release context is sent to OpenAI by
+  default, with summary-count logging.
+- Diagnostic outputs expose previous tag, included commit count, prompt size,
+  batching status, and redaction count.

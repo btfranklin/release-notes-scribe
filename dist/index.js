@@ -30967,6 +30967,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.runAction = runAction;
+const fs_1 = __nccwpck_require__(9896);
+const path_1 = __nccwpck_require__(6928);
 const core = __importStar(__nccwpck_require__(7484));
 const github_1 = __nccwpck_require__(3228);
 const openai_1 = __importDefault(__nccwpck_require__(2583));
@@ -30995,6 +30997,25 @@ function parseSourceExtensions(input) {
         .filter(Boolean)
         .map((value) => value.startsWith(".") ? value.toLowerCase() : `.${value.toLowerCase()}`);
     return new Set(values);
+}
+const FINAL_RELEASE_PROMPT = (0, fs_1.readFileSync)((0, path_1.join)(__dirname, "prompts", "final-release.md"), "utf8").trim();
+const STAGE_SUMMARY_PROMPT = (0, fs_1.readFileSync)((0, path_1.join)(__dirname, "prompts", "stage-summary.md"), "utf8").trim();
+function loadPrompt(name) {
+    switch (name) {
+        case "final-release.md":
+            return FINAL_RELEASE_PROMPT;
+        case "stage-summary.md":
+            return STAGE_SUMMARY_PROMPT;
+        default:
+            throw new Error(`Unknown prompt asset: ${name}`);
+    }
+}
+function setDiagnosticOutputs(actionCore, previousTag, commitCount, promptCharCount, usedBatching, redactionCount) {
+    actionCore.setOutput("previous_tag", previousTag);
+    actionCore.setOutput("commit_count", String(commitCount));
+    actionCore.setOutput("prompt_char_count", String(promptCharCount));
+    actionCore.setOutput("used_batching", String(usedBatching));
+    actionCore.setOutput("redaction_count", String(redactionCount));
 }
 function trimText(text, maxLength) {
     if (text.length <= maxLength) {
@@ -31145,6 +31166,7 @@ async function runAction(dependencies) {
     const inputTag = actionCore.getInput("tag");
     const previousTagInput = actionCore.getInput("previous_tag");
     const includeGithubNotes = getInputBoolean(actionCore, "include_github_generated_notes", false);
+    const redactSecrets = getInputBoolean(actionCore, "redact_secrets", true);
     const maxDiffLines = Number.parseInt(actionCore.getInput("max_diff_lines") || "120", 10);
     const maxCommits = Number.parseInt(actionCore.getInput("max_commits") || "200", 10);
     const maxStageChars = Number.parseInt(actionCore.getInput("max_stage_chars") || "400000", 10);
@@ -31200,25 +31222,36 @@ async function runAction(dependencies) {
             actionCore.warning(`Failed to fetch GitHub-generated notes: ${error}`);
         }
     }
+    let promptCommits = commits;
+    let promptGithubNotes = githubNotes;
+    let redactionCount = 0;
+    if (redactSecrets) {
+        const redactedCommits = (0, lib_1.redactCommitData)(commits);
+        const redactedGithubNotes = (0, lib_1.redactPossibleSecrets)(githubNotes);
+        promptCommits = redactedCommits.commits;
+        promptGithubNotes = redactedGithubNotes.text;
+        redactionCount = redactedCommits.count + redactedGithubNotes.count;
+        if (redactionCount > 0) {
+            actionCore.warning(`Possible secret detected; redacted ${redactionCount} value(s) before transmission to OpenAI.`);
+        }
+    }
     const client = dependencies.createOpenAIClient({
         apiKey,
         baseURL: baseUrl,
     });
-    const finalInstructions = "Write concise release notes in Markdown for end users. " +
-        "Use a '## What's Changed' heading and bullet points. " +
-        "Prefer user-facing changes over internal refactors. " +
-        "Do not include code fences.";
-    const stageInstructions = "Summarize the following commits into a concise Markdown bullet list. " +
-        "Focus on user-facing changes; mention notable internal changes briefly. " +
-        "Do not include code fences.";
-    const fullPrompt = (0, lib_1.buildPrompt)(tag, previousTag, commits, githubNotes);
+    const finalInstructions = loadPrompt("final-release.md");
+    const stageInstructions = loadPrompt("stage-summary.md");
+    const fullPrompt = (0, lib_1.buildPrompt)(tag, previousTag, promptCommits, promptGithubNotes);
     let releaseNotes = "";
+    let promptCharCount = fullPrompt.length;
+    let usedBatching = false;
     if (fullPrompt.length <= maxStageChars) {
         releaseNotes = await generateResponseText(client, model, fullPrompt, finalInstructions, "final");
     }
     else {
+        usedBatching = true;
         const chunkBudget = Math.max(1000, maxStageChars - 2000);
-        const chunks = chunkCommits(commits, chunkBudget, logger);
+        const chunks = chunkCommits(promptCommits, chunkBudget, logger);
         const summaries = [];
         actionCore.info(`Full prompt size ${fullPrompt.length} exceeds ${maxStageChars}. ` +
             `Summarizing in ${chunks.length} batches.`);
@@ -31227,19 +31260,22 @@ async function runAction(dependencies) {
             const summary = await generateResponseText(client, model, chunkPrompt, stageInstructions, `stage-${index + 1}`);
             summaries.push(summary);
         }
-        const finalPrompt = buildFinalPrompt(tag, previousTag, summaries, githubNotes);
+        const finalPrompt = buildFinalPrompt(tag, previousTag, summaries, promptGithubNotes);
+        promptCharCount = finalPrompt.length;
         releaseNotes = await generateResponseText(client, model, finalPrompt, finalInstructions, "final");
     }
     const releaseName = releaseNameOverride || tag;
     if (!createRelease) {
         actionCore.setOutput("release_notes", releaseNotes);
         actionCore.setOutput("release_url", "");
+        setDiagnosticOutputs(actionCore, previousTag, commitShas.length, promptCharCount, usedBatching, redactionCount);
         actionCore.info("Release creation skipped because create_release is false.");
         return;
     }
     const release = await writeRelease(octokit, actionContext, tag, releaseName, releaseNotes, draft, prerelease, existingReleaseBehavior);
     actionCore.setOutput("release_notes", releaseNotes);
     actionCore.setOutput("release_url", release.html_url ?? "");
+    setDiagnosticOutputs(actionCore, previousTag, commitShas.length, promptCharCount, usedBatching, redactionCount);
     actionCore.info(`Created or updated release ${releaseName} (${release.html_url ?? ""}).`);
 }
 async function run() {
@@ -31270,13 +31306,15 @@ if (require.main === require.cache[eval('__filename')]) {
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.DEFAULT_SOURCE_EXTENSIONS = void 0;
+exports.DEFAULT_SOURCE_EXTENSIONS = exports.REDACTION_PLACEHOLDER = void 0;
 exports.runGit = runGit;
 exports.isShallowRepository = isShallowRepository;
 exports.getTagFromRef = getTagFromRef;
 exports.listTags = listTags;
 exports.resolvePreviousTag = resolvePreviousTag;
 exports.getCommitShas = getCommitShas;
+exports.redactPossibleSecrets = redactPossibleSecrets;
+exports.redactCommitData = redactCommitData;
 exports.extractDiffLines = extractDiffLines;
 exports.buildCommitData = buildCommitData;
 exports.formatCommitBlock = formatCommitBlock;
@@ -31285,6 +31323,7 @@ exports.extractResponseText = extractResponseText;
 const node_child_process_1 = __nccwpck_require__(1421);
 const MAX_LINE_LENGTH = 300;
 const SEMANTIC_RELEASE_TAG = /^v\d+\.\d+\.\d+(?:[+-][0-9A-Za-z.-]+)?$/;
+exports.REDACTION_PLACEHOLDER = "[REDACTED POSSIBLE SECRET]";
 exports.DEFAULT_SOURCE_EXTENSIONS = new Set([
     ".ts",
     ".tsx",
@@ -31327,6 +31366,40 @@ const noopLogger = {
     info: () => { },
     warning: () => { },
 };
+const REDACTION_PATTERNS = [
+    {
+        pattern: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g,
+        replace: () => exports.REDACTION_PLACEHOLDER,
+    },
+    {
+        pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
+        replace: () => exports.REDACTION_PLACEHOLDER,
+    },
+    {
+        pattern: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}\b/g,
+        replace: () => exports.REDACTION_PLACEHOLDER,
+    },
+    {
+        pattern: /\bsk-(?:proj-|live-|test-)?[A-Za-z0-9_-]{20,}\b/g,
+        replace: () => exports.REDACTION_PLACEHOLDER,
+    },
+    {
+        pattern: /\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b/g,
+        replace: () => exports.REDACTION_PLACEHOLDER,
+    },
+    {
+        pattern: /\bwhsec_[A-Za-z0-9]{16,}\b/g,
+        replace: () => exports.REDACTION_PLACEHOLDER,
+    },
+    {
+        pattern: /\bBearer\s+[A-Za-z0-9._~+/=-]{20,}\b/gi,
+        replace: () => `Bearer ${exports.REDACTION_PLACEHOLDER}`,
+    },
+    {
+        pattern: /\b([A-Za-z0-9_-]*(?:API[_-]?KEY|ACCESS[_-]?TOKEN|AUTH[_-]?TOKEN|TOKEN|SECRET|WEBHOOK[_-]?SECRET|CLIENT[_-]?SECRET|PRIVATE[_-]?KEY|PASSWORD)[A-Za-z0-9_-]*)(\s*[:=]\s*)(["']?)([^"'\s]{12,})\3/gi,
+        replace: (_match, name, separator, quote) => `${name}${separator}${quote}${exports.REDACTION_PLACEHOLDER}${quote}`,
+    },
+];
 function runGit(args, options = {}) {
     const { allowFailure = false, trim = true, maxBuffer } = options;
     try {
@@ -31428,6 +31501,35 @@ function getCommitShas(previousTag, currentTag, maxCommits, logger = noopLogger)
         return commits.slice(commits.length - maxCommits);
     }
     return commits;
+}
+function redactPossibleSecrets(text) {
+    let result = text;
+    let count = 0;
+    for (const { pattern, replace } of REDACTION_PATTERNS) {
+        result = result.replace(pattern, (...args) => {
+            count += 1;
+            return replace(...args);
+        });
+    }
+    return { text: result, count };
+}
+function redactCommitData(commits) {
+    let count = 0;
+    const redactedCommits = commits.map((commit) => {
+        const message = redactPossibleSecrets(commit.message);
+        const diffLines = commit.diffLines.map((line) => {
+            const redacted = redactPossibleSecrets(line);
+            count += redacted.count;
+            return redacted.text;
+        });
+        count += message.count;
+        return {
+            ...commit,
+            message: message.text,
+            diffLines,
+        };
+    });
+    return { commits: redactedCommits, count };
 }
 function formatFileStatus(status) {
     if (status.startsWith("R")) {

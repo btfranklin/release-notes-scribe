@@ -9,7 +9,8 @@ This directory is the system of record for maintainers and coding agents. Keep
 - `docs/development.md`: setup, validation, CI, and release workflow.
 - `docs/releasing.md`: release ordering for this action's self-use of
   `release-notes-scribe`.
-- `docs/legibility-audit.md`: current strengths, gaps, and next investments.
+- `docs/legibility-audit.md`: current strengths, guardrails, and implemented
+  reliability work.
 
 ## Quick Context
 
@@ -24,7 +25,8 @@ the local action implementation before consumers install a versioned tag.
 
 - Keep user-facing setup and inputs in `README.md`.
 - Keep maintainer and agent workflow details in this directory.
-- When `action.yml` defaults change, update `README.md` in the same change.
+- When `action.yml` changes, run `npm run docs:reference` to update the
+  generated README action reference in the same change.
 - When source behavior changes, update `docs/architecture.md` if boundaries or
   data flow changed.
 - When validation expectations change, update `docs/development.md`.

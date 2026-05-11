@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { readFileSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -11,8 +11,12 @@ import {
   extractResponseText,
   getCommitShas,
   getTagFromRef,
+  REDACTION_PLACEHOLDER,
+  redactPossibleSecrets,
   resolvePreviousTag,
 } from "../src/lib";
+
+const root = process.cwd();
 
 function initRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), "scribe-"));
@@ -64,6 +68,10 @@ function currentHead(repo: string): string {
     cwd: repo,
     encoding: "utf8",
   }).trim();
+}
+
+function readPrompt(name: string): string {
+  return readFileSync(join(root, "src", "prompts", name), "utf8").trim();
 }
 
 async function withRepo<T>(fn: (repo: string) => T | Promise<T>): Promise<T> {
@@ -203,6 +211,14 @@ async function runMockedAction(
   return { coreMock, openAI, github };
 }
 
+function openAIInput(openAI: ReturnType<typeof makeOpenAIClient>): string {
+  return (openAI.calls[0] as { input: string }).input;
+}
+
+function openAIInstructions(openAI: ReturnType<typeof makeOpenAIClient>): string {
+  return (openAI.calls[0] as { instructions: string }).instructions;
+}
+
 describe.sequential("release notes helpers", () => {
   it("parses tag names from refs", () => {
     expect(getTagFromRef("refs/tags/v1.2.3")).toBe("v1.2.3");
@@ -302,6 +318,37 @@ describe.sequential("release notes helpers", () => {
       })
     ).toBe("hi");
   });
+
+  it("redacts high-confidence secrets while preserving normal text", () => {
+    const openAiKey = ["sk", "proj", "abcdefghijklmnopqrstuvwxyz123456"].join("-");
+    const bearerToken = "abcdefghijklmnopqrstuvwxyz123456";
+    const webhookSecret = ["whsec", "abcdefghijklmnopqrstuvwxyz123456"].join("_");
+    const stripeKey = ["sk", "live", "abcdefghijklmnopqrstuvwxyz"].join("_");
+    const githubToken = ["ghp", "abcdefghijklmnopqrstuvwxyz1234567890"].join("_");
+    const privateKeyBlock = [
+      "-----BEGIN " + "PRIVATE KEY-----",
+      "abc123",
+      "-----END " + "PRIVATE KEY-----",
+    ].join("\n");
+    const original = [
+      "Release keeps normal feature notes.",
+      `OPENAI_API_KEY=${openAiKey}`,
+      `Authorization: Bearer ${bearerToken}`,
+      `webhook=${webhookSecret}`,
+      `stripe=${stripeKey}`,
+      `github=${githubToken}`,
+      privateKeyBlock,
+    ].join("\n");
+
+    const redacted = redactPossibleSecrets(original);
+
+    expect(redacted.count).toBeGreaterThanOrEqual(6);
+    expect(redacted.text).toContain("Release keeps normal feature notes.");
+    expect(redacted.text).toContain(REDACTION_PLACEHOLDER);
+    expect(redacted.text).not.toContain(openAiKey);
+    expect(redacted.text).not.toContain(githubToken);
+    expect(redacted.text).not.toContain("abc123");
+  });
 });
 
 describe.sequential("action orchestration", () => {
@@ -315,6 +362,7 @@ describe.sequential("action orchestration", () => {
       const { coreMock, github, openAI } = await runMockedAction(repo);
 
       expect(openAI.calls).toHaveLength(1);
+      expect(openAIInstructions(openAI)).toBe(readPrompt("final-release.md"));
       expect(github.calls.getReleaseByTag).toHaveLength(1);
       expect(github.calls.createRelease).toHaveLength(1);
       expect(github.calls.updateRelease).toHaveLength(0);
@@ -322,6 +370,11 @@ describe.sequential("action orchestration", () => {
       expect(coreMock.outputs.release_url).toBe(
         "https://github.com/acme/widgets/releases/tag/v1.1.0"
       );
+      expect(coreMock.outputs.previous_tag).toBe("v1.0.0");
+      expect(coreMock.outputs.commit_count).toBe("1");
+      expect(coreMock.outputs.prompt_char_count).toMatch(/^\d+$/);
+      expect(coreMock.outputs.used_batching).toBe("false");
+      expect(coreMock.outputs.redaction_count).toBe("0");
     }));
 
   it("generates notes without writing a release when create_release is false", async () =>
@@ -340,6 +393,9 @@ describe.sequential("action orchestration", () => {
       expect(github.calls.updateRelease).toHaveLength(0);
       expect(coreMock.outputs.release_notes).toContain("Generated notes");
       expect(coreMock.outputs.release_url).toBe("");
+      expect(coreMock.outputs.previous_tag).toBe("v1.0.0");
+      expect(coreMock.outputs.commit_count).toBe("1");
+      expect(coreMock.outputs.used_batching).toBe("false");
     }));
 
   it("updates an existing draft release by default", async () =>
@@ -414,5 +470,97 @@ describe.sequential("action orchestration", () => {
 
       expect(github.calls.createRelease).toHaveLength(0);
       expect(github.calls.updateRelease).toHaveLength(1);
+    }));
+
+  it("redacts secrets from OpenAI input by default and logs a summary", async () =>
+    withRepo(async (repo) => {
+      const secret = ["sk", "proj", "abcdefghijklmnopqrstuvwxyz123456"].join("-");
+      commitFile(repo, "file.ts", `export const token = "${secret}";`, "feat: first", 1);
+      createTag(repo, "v1.0.0", 1);
+      commitFile(
+        repo,
+        "file.ts",
+        `export const rotatedToken = "${secret}";`,
+        `fix: rotate ${secret}`,
+        2
+      );
+      createTag(repo, "v1.1.0", 2);
+
+      const { coreMock, openAI } = await runMockedAction(repo, {
+        create_release: "false",
+      });
+
+      expect(openAIInput(openAI)).toContain(REDACTION_PLACEHOLDER);
+      expect(openAIInput(openAI)).not.toContain(secret);
+      expect(Number.parseInt(coreMock.outputs.redaction_count, 10)).toBeGreaterThan(0);
+      const redactionWarning = coreMock.warnings.find((warning) =>
+        warning.includes("Possible secret detected")
+      );
+      expect(redactionWarning).toContain("redacted");
+      expect(redactionWarning).not.toContain(secret);
+    }));
+
+  it("keeps OpenAI input unredacted when redaction is disabled", async () =>
+    withRepo(async (repo) => {
+      const secret = ["sk", "proj", "abcdefghijklmnopqrstuvwxyz123456"].join("-");
+      commitFile(repo, "file.ts", "export const one = 1;", "feat: first", 1);
+      createTag(repo, "v1.0.0", 1);
+      commitFile(
+        repo,
+        "file.ts",
+        `export const token = "${secret}";`,
+        `fix: keep ${secret}`,
+        2
+      );
+      createTag(repo, "v1.1.0", 2);
+
+      const { coreMock, openAI } = await runMockedAction(repo, {
+        create_release: "false",
+        redact_secrets: "false",
+      });
+
+      expect(openAIInput(openAI)).toContain(secret);
+      expect(coreMock.outputs.redaction_count).toBe("0");
+      expect(
+        coreMock.warnings.some((warning) =>
+          warning.includes("Possible secret detected")
+        )
+      ).toBe(false);
+    }));
+
+  it("sets batching diagnostics for large prompts", async () =>
+    withRepo(async (repo) => {
+      commitFile(repo, "file.ts", "export const one = 1;", "feat: first", 1);
+      createTag(repo, "v1.0.0", 1);
+      commitFile(
+        repo,
+        "file.ts",
+        Array.from({ length: 150 }, (_, index) => `export const v${index} = ${index};`).join("\n"),
+        "feat: large change",
+        2
+      );
+      createTag(repo, "v1.1.0", 2);
+
+      const { coreMock, openAI } = await runMockedAction(repo, {
+        create_release: "false",
+        max_stage_chars: "1000",
+      });
+
+      expect(openAI.calls.length).toBeGreaterThan(1);
+      expect(coreMock.outputs.used_batching).toBe("true");
+      expect(coreMock.outputs.prompt_char_count).toMatch(/^\d+$/);
+    }));
+
+  it("sets an empty previous_tag output for the first release", async () =>
+    withRepo(async (repo) => {
+      commitFile(repo, "file.ts", "export const one = 1;", "feat: first", 1);
+      createTag(repo, "v1.1.0", 1);
+
+      const { coreMock } = await runMockedAction(repo, {
+        create_release: "false",
+      });
+
+      expect(coreMock.outputs.previous_tag).toBe("");
+      expect(coreMock.outputs.commit_count).toBe("1");
     }));
 });

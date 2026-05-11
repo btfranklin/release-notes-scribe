@@ -15,20 +15,25 @@ Release Notes Scribe has three runtime responsibilities:
    SHAs, file stats, and diff snippets.
 5. `src/index.ts` optionally asks GitHub for generated release notes as extra
    context.
-6. The OpenAI client calls the Responses API.
-7. If the prompt exceeds `max_stage_chars`, commits are summarized in batches
+6. Likely secrets are redacted from commit messages, diff lines, and
+   GitHub-generated notes unless `redact_secrets` is disabled.
+7. Prompt instructions are loaded from Markdown assets in `src/prompts/`.
+8. The OpenAI client calls the Responses API.
+9. If the prompt exceeds `max_stage_chars`, commits are summarized in batches
    before a final release-note prompt is built.
-8. If `create_release` is enabled, `@actions/github` creates the release or
+10. If `create_release` is enabled, `@actions/github` creates the release or
    updates an existing release according to `existing_release_behavior`.
-9. Action outputs are set.
+11. Action outputs, including diagnostics, are set.
 
 ## Module Boundaries
 
 - `src/index.ts` owns action orchestration, input validation, OpenAI calls,
-  GitHub API calls, chunking, and action outputs.
+  GitHub API calls, chunking, prompt asset loading, and action outputs.
 - `src/lib.ts` owns pure or mostly deterministic helper behavior around git
   commands, tag resolution, commit shaping, prompt construction, and response
   text extraction.
+- `src/prompts/` owns Markdown instruction assets that must be bundled into
+  `dist/`.
 - `tests/release-notes.test.ts` validates the git and prompt helper contract
   with temporary repositories.
 - `tests/repo-legibility.test.ts` validates documentation and metadata
@@ -49,19 +54,21 @@ action inputs, secrets, OpenAI, or GitHub API side effects.
   releases unless `existing_release_behavior` is set to `update_any`.
 - `create_release: false` still generates `release_notes` but skips GitHub
   release lookup, create, and update calls.
+- `redact_secrets` defaults to `true`; redaction logs a summary count without
+  exposing matched values, paths, or commit SHAs.
+- Diagnostic outputs report the resolved previous tag, included commit count,
+  final prompt size, batching status, and redaction count.
 - `source_extensions` controls which file diffs are included. Non-source files
   are summarized by filename to avoid noisy prompts.
 - The generated `dist/index.js` bundle is committed because GitHub Actions runs
   JavaScript actions from checked-in built output.
-- README input defaults must match `action.yml`.
+- README action input and output reference is generated from `action.yml`.
 
 ## External Boundaries
 
 - Git is invoked through `runGit` in `src/lib.ts`.
 - GitHub API access uses `@actions/github`.
 - OpenAI access uses the Responses API through the `openai` package.
-- No prompts are stored externally today; prompt text is assembled in code.
-  If prompts become larger or reused across flows, move them into versioned
-  Markdown templates bundled into `dist/`, or TypeScript prompt modules. Any
-  external prompt assets must be included in the ncc bundle and covered by
-  tests that prove the action can load them at runtime.
+- Prompt instructions are Markdown files copied into `dist/prompts/` after the
+  ncc build; tests verify that source prompt assets are present in the generated
+  action output.
