@@ -24,15 +24,16 @@
 ## Remaining Gaps
 
 - Prompt wording still lives inline in `src/index.ts`. That is acceptable while
-  the prompts are short, but reusable prompt files would be more legible if the
-  release-note policy grows.
+  the prompts are short. If the release-note policy grows, move reusable prompt
+  text into versioned Markdown templates bundled into `dist/`, or TypeScript
+  prompt modules.
 - There is no generated inventory for action inputs and README docs. The current
   legibility test covers the highest-risk defaults, but a generated reference
   would scale better if the input surface grows.
 
 ## Next Investments
 
-1. Move longer prompt instructions into versioned prompt files if prompt policy
-   becomes more complex or repeated.
+1. Move longer prompt instructions into versioned Markdown templates or
+   TypeScript prompt modules if prompt policy becomes more complex or repeated.
 2. Generate an input/output reference from `action.yml` and check README
    freshness from that generated artifact.

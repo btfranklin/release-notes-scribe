@@ -61,5 +61,7 @@ action inputs, secrets, OpenAI, or GitHub API side effects.
 - GitHub API access uses `@actions/github`.
 - OpenAI access uses the Responses API through the `openai` package.
 - No prompts are stored externally today; prompt text is assembled in code.
-  If prompts become larger or reused across flows, move them into promptdown
-  files and document how they are loaded or bundled.
+  If prompts become larger or reused across flows, move them into versioned
+  Markdown templates bundled into `dist/`, or TypeScript prompt modules. Any
+  external prompt assets must be included in the ncc bundle and covered by
+  tests that prove the action can load them at runtime.
