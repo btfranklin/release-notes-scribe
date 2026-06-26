@@ -15,14 +15,14 @@
     "release": "node scripts/release.mjs"
   },
   "dependencies": {
-    "@actions/core": "^2.0.1",
-    "@actions/github": "^6.0.1",
-    "openai": "^6.15.0"
+    "@actions/core": ">=3.0.1",
+    "@actions/github": ">=9.1.1",
+    "openai": ">=6.45.0"
   },
   "devDependencies": {
-    "@types/node": "^25.0.3",
-    "@vercel/ncc": "^0.38.4",
-    "typescript": "^5.9.3",
-    "vitest": "^4.0.16"
+    "@types/node": ">=26.0.1",
+    "@vercel/ncc": ">=0.44.0",
+    "typescript": ">=6.0.3",
+    "vitest": ">=4.1.9"
   }
 }

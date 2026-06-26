@@ -133,14 +133,14 @@ function parseSourceExtensions(input: string): Set<string> {
   return new Set(values);
 }
 
-const FINAL_RELEASE_PROMPT = readFileSync(
-  join(__dirname, "prompts", "final-release.md"),
-  "utf8"
-).trim();
-const STAGE_SUMMARY_PROMPT = readFileSync(
-  join(__dirname, "prompts", "stage-summary.md"),
-  "utf8"
-).trim();
+const PROMPTS_DIRECTORY = join(__dirname, ...["prompts"]);
+
+function readPromptAsset(name: string): string {
+  return readFileSync(join(PROMPTS_DIRECTORY, name), "utf8").trim();
+}
+
+const FINAL_RELEASE_PROMPT = readPromptAsset("final-release.md");
+const STAGE_SUMMARY_PROMPT = readPromptAsset("stage-summary.md");
 
 function loadPrompt(name: string): string {
   switch (name) {
