@@ -619,6 +619,6 @@ async function run(): Promise<void> {
   }
 }
 
-if (require.main === module) {
+if (process.env.GITHUB_ACTIONS === "true" || require.main === module) {
   run();
 }

@@ -48804,7 +48804,7 @@ async function run() {
         setFailed(message);
     }
 }
-if (__nccwpck_require__.c[__nccwpck_require__.s] === module) {
+if (process.env.GITHUB_ACTIONS === "true" || __nccwpck_require__.c[__nccwpck_require__.s] === module) {
     run();
 }
 
