@@ -1,6 +1,6 @@
 {
   "name": "release-notes-scribe",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "description": "GitHub Action to generate LLM release notes and draft releases.",
   "main": "dist/index.js",
