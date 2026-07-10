@@ -382,7 +382,7 @@ export async function runAction(dependencies: ActionDependencies): Promise<void>
   const actionContext = dependencies.context;
   const apiKey = actionCore.getInput("openai_api_key", { required: true });
   const baseUrl = actionCore.getInput("openai_base_url") || undefined;
-  const model = actionCore.getInput("model") || "gpt-5.5";
+  const model = actionCore.getInput("model") || "gpt-5.6-terra";
   const githubToken =
     actionCore.getInput("github_token") || dependencies.env.GITHUB_TOKEN;
   const inputTag = actionCore.getInput("tag");

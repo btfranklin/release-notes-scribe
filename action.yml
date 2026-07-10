@@ -16,7 +16,7 @@ inputs:
   model:
     description: "Model name (must support OpenAI Responses API)."
     required: false
-    default: "gpt-5.5"
+    default: "gpt-5.6-terra"
   github_token:
     description: "GitHub token with contents:write permissions. Defaults to GITHUB_TOKEN env var."
     required: false

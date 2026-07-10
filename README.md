@@ -10,7 +10,7 @@ Generate draft GitHub release notes using the OpenAI Responses API, based on the
 - Triggered by a tag push (recommended).
 - Finds the previous tag and gathers commits in the range.
 - Builds a structured prompt with commit messages + diff lines.
-- Calls the OpenAI Responses API (model configurable, default `gpt-5.5`).
+- Calls the OpenAI Responses API (model configurable, default `gpt-5.6-terra`).
 - Creates a **draft** GitHub Release with the generated notes.
 
 ## Example workflow
@@ -46,7 +46,7 @@ jobs:
 
 - `openai_api_key`(required): OpenAI-compatible API key (Responses API required).
 - `openai_base_url`: Optional base URL for OpenAI-compatible providers.
-- `model`: Model name (must support OpenAI Responses API). Default: `gpt-5.5`.
+- `model`: Model name (must support OpenAI Responses API). Default: `gpt-5.6-terra`.
 - `github_token`: GitHub token with contents:write permissions. Defaults to GITHUB_TOKEN env var.
 - `tag`: Release tag. Defaults to the tag that triggered the workflow.
 - `previous_tag`: Override the previous tag for comparison.
