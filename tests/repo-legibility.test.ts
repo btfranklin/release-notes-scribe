@@ -163,7 +163,7 @@ describe("repo legibility", () => {
   it("documents and preserves the self-hosted release workflow contract", () => {
     const workflow = read(".github/workflows/release.yml");
 
-    expect(workflow).toContain('tags:\n      - "v*.*.*"');
+    expect(workflow).toContain('tags:\n            - "v*.*.*"');
     expect(workflow).toContain("fetch-depth: 0");
     expect(workflow).toContain("uses: ./");
 
