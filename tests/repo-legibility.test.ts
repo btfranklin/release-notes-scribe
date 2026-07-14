@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 
 const root = process.cwd();
 
@@ -22,25 +23,43 @@ function requireText(sourcePath: string, expected: string, reason: string): void
   }
 }
 
+function readYaml<T>(path: string): T {
+  return parse(read(path)) as T;
+}
+
+type ActionMetadata = {
+  inputs: Record<string, { default?: string }>;
+  runs: {
+    using: string;
+    main: string;
+  };
+};
+
+type WorkflowStep = {
+  uses?: string;
+  with?: Record<string, string | number>;
+};
+
+type Workflow = {
+  on?: {
+    push?: {
+      tags?: string[];
+    };
+  };
+  jobs: Record<string, { steps?: WorkflowStep[] }>;
+};
+
 function actionDefault(input: string): string {
-  const lines = read("action.yml").split("\n");
-  const start = lines.findIndex((line) => line === `  ${input}:`);
-  if (start === -1) {
+  const action = readYaml<ActionMetadata>("action.yml");
+  const metadata = action.inputs[input];
+  if (!metadata) {
     throw new Error(`action.yml is missing input ${input}.`);
   }
-
-  for (let index = start + 1; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (/^  [A-Za-z0-9_]+:/.test(line)) {
-      break;
-    }
-    const match = /^    default: "([^"]*)"/.exec(line);
-    if (match) {
-      return match[1];
-    }
+  if (metadata.default !== undefined) {
+    return String(metadata.default);
   }
 
-  throw new Error(`action.yml input ${input} is missing a quoted default.`);
+  throw new Error(`action.yml input ${input} is missing a default.`);
 }
 
 function readmeDefault(input: string): string {
@@ -58,7 +77,7 @@ function readmeDefault(input: string): string {
   return match[1];
 }
 
-describe("repo legibility", () => {
+describe("documentation governance", () => {
   it("keeps a discoverable docs spine", () => {
     const docs = [
       "docs/index.md",
@@ -113,7 +132,7 @@ describe("repo legibility", () => {
     expect(lines.length).toBeLessThanOrEqual(45);
   });
 
-  it("keeps README defaults aligned with action metadata", () => {
+  it("keeps generated README defaults aligned with action metadata", () => {
     const defaults = [
       "model",
       "include_github_generated_notes",
@@ -131,11 +150,6 @@ describe("repo legibility", () => {
       expect(readmeDefault(input)).toBe(actionDefault(input));
     }
 
-    requireText(
-      "src/index.ts",
-      `getInput("model") || "${actionDefault("model")}"`,
-      "runtime fallback must match the documented action default"
-    );
     requireText(
       "docs/architecture.md",
       "existing_release_behavior",
@@ -160,13 +174,7 @@ describe("repo legibility", () => {
     });
   });
 
-  it("documents and preserves the self-hosted release workflow contract", () => {
-    const workflow = read(".github/workflows/release.yml");
-
-    expect(workflow).toContain('tags:\n            - "v*.*.*"');
-    expect(workflow).toContain("fetch-depth: 0");
-    expect(workflow).toContain("uses: ./");
-
+  it("documents the self-hosted release workflow contract", () => {
     requireText(
       "docs/development.md",
       "uses: ./",
@@ -184,38 +192,12 @@ describe("repo legibility", () => {
     );
   });
 
-  it("keeps the JavaScript action runtime aligned with CI", () => {
-    requireText(
-      "action.yml",
-      'using: "node24"',
-      "GitHub Actions currently supports Node 24 for JavaScript actions"
-    );
-    requireText(
-      ".github/workflows/build.yml",
-      "node-version: 24",
-      "CI should build and test on the declared action runtime"
-    );
+  it("documents the JavaScript action runtime", () => {
     requireText(
       "docs/architecture.md",
       "Node 24",
       "architecture docs should name the declared action runtime"
     );
-  });
-
-  it("keeps prompt assets discoverable in source and dist", () => {
-    const prompts = ["final-release.md", "stage-summary.md"];
-
-    for (const prompt of prompts) {
-      const source = read(`src/prompts/${prompt}`).trim();
-      const distPromptPath = join(root, "dist", "prompts", prompt);
-      const distIndex = read("dist/index.js");
-      const bundledAsset = existsSync(distPromptPath)
-        ? readFileSync(distPromptPath, "utf8").trim()
-        : "";
-
-      expect(source.length).toBeGreaterThan(20);
-      expect(distIndex.includes(source) || bundledAsset === source).toBe(true);
-    }
   });
 
   it("keeps the legibility audit focused on current state", () => {
@@ -225,5 +207,42 @@ describe("repo legibility", () => {
     expect(audit).not.toContain("Next Investments");
     expect(audit).not.toContain("generated inventory");
     expect(audit).not.toContain("prompt policy grows");
+  });
+});
+
+describe("runtime metadata and packaging contracts", () => {
+  it("preserves the parsed self-hosted release workflow contract", () => {
+    const workflow = readYaml<Workflow>(".github/workflows/release.yml");
+    const releaseJob = workflow.jobs["draft-release"];
+    const steps = releaseJob?.steps ?? [];
+    const checkout = steps.find((step) =>
+      step.uses?.startsWith("actions/checkout@")
+    );
+
+    expect(workflow.on?.push?.tags).toContain("v*.*.*");
+    expect(checkout?.with?.["fetch-depth"]).toBe(0);
+    expect(steps.some((step) => step.uses === "./")).toBe(true);
+  });
+
+  it("aligns the parsed action runtime, entrypoint, and CI Node version", () => {
+    const action = readYaml<ActionMetadata>("action.yml");
+    const workflow = readYaml<Workflow>(".github/workflows/build.yml");
+    const runtimeVersion = /^node(\d+)$/.exec(action.runs.using)?.[1];
+    const setupNode = Object.values(workflow.jobs)
+      .flatMap((job) => job.steps ?? [])
+      .find((step) => step.uses?.startsWith("actions/setup-node@"));
+
+    expect(runtimeVersion).toBeDefined();
+    expect(String(setupNode?.with?.["node-version"])).toBe(runtimeVersion);
+    expect(action.runs.main).toBe("dist/index.js");
+    expect(existsSync(join(root, action.runs.main))).toBe(true);
+  });
+
+  it("loads packaged prompt assets through the built action entrypoint", () => {
+    execFileSync(process.execPath, ["-e", 'require("./dist/index.js")'], {
+      cwd: root,
+      env: { ...process.env, GITHUB_ACTIONS: "false" },
+      stdio: "pipe",
+    });
   });
 });

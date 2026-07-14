@@ -70,5 +70,5 @@ action inputs, secrets, OpenAI, or GitHub API side effects.
 - GitHub API access uses `@actions/github`.
 - OpenAI access uses the Responses API through the `openai` package.
 - Prompt instructions are Markdown files copied into `dist/prompts/` after the
-  ncc build; tests verify that source prompt assets are present in the generated
-  action output.
+  ncc build; tests import the generated action output to verify that its packaged
+  prompt assets load at runtime.

@@ -3,6 +3,7 @@ import { readFileSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 
 import { runAction, type ActionDependencies } from "../src/index";
 import {
@@ -72,6 +73,17 @@ function currentHead(repo: string): string {
 
 function readPrompt(name: string): string {
   return readFileSync(join(root, "src", "prompts", name), "utf8").trim();
+}
+
+function actionDefault(input: string): string {
+  const action = parse(readFileSync(join(root, "action.yml"), "utf8")) as {
+    inputs: Record<string, { default?: string }>;
+  };
+  const value = action.inputs[input]?.default;
+  if (value === undefined) {
+    throw new Error(`action.yml input ${input} is missing a default.`);
+  }
+  return String(value);
 }
 
 async function withRepo<T>(fn: (repo: string) => T | Promise<T>): Promise<T> {
@@ -352,6 +364,22 @@ describe.sequential("release notes helpers", () => {
 });
 
 describe.sequential("action orchestration", () => {
+  it("resolves the default model from the action contract", async () =>
+    withRepo(async (repo) => {
+      commitFile(repo, "file.ts", "export const one = 1;", "feat: first", 1);
+      createTag(repo, "v1.0.0", 1);
+      commitFile(repo, "file.ts", "export const two = 2;", "feat: second", 2);
+      createTag(repo, "v1.1.0", 2);
+
+      const { openAI } = await runMockedAction(repo, {
+        create_release: "false",
+      });
+
+      expect(openAI.calls[0]).toMatchObject({
+        model: actionDefault("model"),
+      });
+    }));
+
   it("creates a release and sets outputs", async () =>
     withRepo(async (repo) => {
       commitFile(repo, "file.ts", "export const one = 1;", "feat: first", 1);
