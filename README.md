@@ -16,7 +16,7 @@ Generate draft GitHub release notes using the OpenAI Responses API, based on the
 ## Example workflow
 
 ```yaml
-name: Draft Release Notes
+name: Create Draft Release
 
 on:
   push:
